@@ -5,7 +5,7 @@ import asyncio
 import logging
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -58,21 +58,47 @@ class VLMSettingsPayload(BaseModel):
     vlm_api_base: Optional[str] = None
     vlm_api_key: Optional[str] = None
 
-class SettingsPayload(BaseModel):
-    # Chat Provider
-    provider_type: str
-    model_name: str
-    api_base: Optional[str] = None
-    api_key: Optional[str] = None
-    
-    # VLM Provider
-    use_vlm: bool = False
-    vlm_provider_type: Optional[str] = "ollama"
-    vlm_model: Optional[str] = None
-    vlm_api_base: Optional[str] = None
-    vlm_api_key: Optional[str] = None
 
 def load_settings():
+    # If old settings.json exists, remove it to ensure the key is only in the two config files
+    if SETTINGS_FILE.exists():
+        try:
+            os.remove(SETTINGS_FILE)
+            logger.info("Old settings.json deleted to enforce single-place persistence of API key.")
+        except Exception as e:
+            logger.error(f"Failed to delete old settings.json: {e}")
+
+    # Auto-generate settings_chat.json if missing
+    if not SETTINGS_CHAT_FILE.exists():
+        try:
+            default_chat = {
+                "provider_type": "ollama",
+                "model_name": "gemma4:12b-it-qat",
+                "api_base": "http://localhost:11434",
+                "api_key": "empty"
+            }
+            with open(SETTINGS_CHAT_FILE, "w") as f:
+                json.dump(default_chat, f, indent=2)
+            logger.info("Automatically generated default settings_chat.json")
+        except Exception as e:
+            logger.error(f"Failed to generate default settings_chat.json: {e}")
+
+    # Auto-generate settings_vlm.json if missing
+    if not SETTINGS_VLM_FILE.exists():
+        try:
+            default_vlm = {
+                "use_vlm": False,
+                "vlm_provider_type": "ollama",
+                "vlm_model": "gemma4:12b-it-qat",
+                "vlm_api_base": "http://localhost:11434",
+                "vlm_api_key": "empty"
+            }
+            with open(SETTINGS_VLM_FILE, "w") as f:
+                json.dump(default_vlm, f, indent=2)
+            logger.info("Automatically generated default settings_vlm.json")
+        except Exception as e:
+            logger.error(f"Failed to generate default settings_vlm.json: {e}")
+
     # Load Chat Settings
     chat_loaded = False
     if SETTINGS_CHAT_FILE.exists():
@@ -90,22 +116,6 @@ def load_settings():
         except Exception as e:
             logger.error(f"Failed to load saved Chat settings: {e}")
             
-    if not chat_loaded:
-        if SETTINGS_FILE.exists():
-            try:
-                with open(SETTINGS_FILE, "r") as f:
-                    data = json.load(f)
-                    set_active_provider(
-                        provider_type=data.get("provider_type", "ollama"),
-                        model_name=data.get("model_name", "gemma4:12b-it-qat"),
-                        api_base=data.get("api_base"),
-                        api_key=data.get("api_key")
-                    )
-                    chat_loaded = True
-                    logger.info("Migrated Chat settings from old settings.json.")
-            except Exception as e:
-                logger.error(f"Failed to migrate old Chat settings: {e}")
-                
     if not chat_loaded:
         set_active_provider("ollama", "gemma4:12b-it-qat", "http://localhost:11434")
 
@@ -127,23 +137,6 @@ def load_settings():
         except Exception as e:
             logger.error(f"Failed to load saved VLM settings: {e}")
             
-    if not vlm_loaded:
-        if SETTINGS_FILE.exists():
-            try:
-                with open(SETTINGS_FILE, "r") as f:
-                    data = json.load(f)
-                    set_vlm_provider(
-                        use_vlm=data.get("use_vlm", False),
-                        provider_type=data.get("vlm_provider_type") or "ollama",
-                        model_name=data.get("vlm_model") or "gemma4:12b-it-qat",
-                        api_base=data.get("vlm_api_base"),
-                        api_key=data.get("vlm_api_key")
-                    )
-                    vlm_loaded = True
-                    logger.info("Migrated VLM settings from old settings.json.")
-            except Exception as e:
-                logger.error(f"Failed to migrate old VLM settings: {e}")
-                
     if not vlm_loaded:
         set_vlm_provider(False, "ollama", "gemma4:12b-it-qat", "http://localhost:11434")
 
@@ -167,8 +160,11 @@ app.add_middleware(
 # Endpoints
 @app.get("/api/status")
 async def get_status(ollama_base: str = "http://localhost:11434", xinference_base: str = "http://localhost:9997"):
-    ollama_info = check_ollama_status(ollama_base)
-    xinference_info = check_xinference_status(xinference_base)
+    # Run blocking HTTP status checks in thread pool to avoid blocking the event loop
+    ollama_info, xinference_info = await asyncio.gather(
+        asyncio.to_thread(check_ollama_status, ollama_base),
+        asyncio.to_thread(check_xinference_status, xinference_base)
+    )
     
     active = get_active_provider()
     vlm = get_vlm_provider()
@@ -244,63 +240,6 @@ async def update_vlm_settings(payload: VLMSettingsPayload):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/api/settings")
-async def update_settings(payload: SettingsPayload):
-    try:
-        chat_key = payload.api_key
-        if chat_key == "***":
-            chat_key = get_active_provider().api_key
-            
-        vlm_key = payload.vlm_api_key
-        if vlm_key == "***":
-            vlm_key = get_vlm_provider().api_key
-            
-        set_active_provider(
-            provider_type=payload.provider_type,
-            model_name=payload.model_name,
-            api_base=payload.api_base,
-            api_key=chat_key
-        )
-        set_vlm_provider(
-            use_vlm=payload.use_vlm,
-            provider_type=payload.vlm_provider_type or "ollama",
-            model_name=payload.vlm_model or "gemma4:12b-it-qat",
-            api_base=payload.vlm_api_base,
-            api_key=vlm_key
-        )
-        
-        # Save to old settings.json
-        settings_data = payload.dict()
-        if settings_data.get("api_key") == "***":
-            settings_data["api_key"] = get_active_provider().api_key
-        if settings_data.get("vlm_api_key") == "***":
-            settings_data["vlm_api_key"] = get_vlm_provider().api_key
-            
-        with open(SETTINGS_FILE, "w") as f:
-            json.dump(settings_data, f, indent=2)
-            
-        # Also split and save to new files
-        chat_settings = {
-            "provider_type": payload.provider_type,
-            "model_name": payload.model_name,
-            "api_base": payload.api_base,
-            "api_key": chat_key
-        }
-        vlm_settings = {
-            "use_vlm": payload.use_vlm,
-            "vlm_provider_type": payload.vlm_provider_type,
-            "vlm_model": payload.vlm_model,
-            "vlm_api_base": payload.vlm_api_base,
-            "vlm_api_key": vlm_key
-        }
-        with open(SETTINGS_CHAT_FILE, "w") as f:
-            json.dump(chat_settings, f, indent=2)
-        with open(SETTINGS_VLM_FILE, "w") as f:
-            json.dump(vlm_settings, f, indent=2)
-            
-        return {"status": "success", "message": "Settings updated and saved."}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -313,8 +252,8 @@ async def upload_file(file: UploadFile = File(...)):
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
-        # Run indexing in thread pool to avoid blocking the async event loop
-        doc_id = await asyncio.to_thread(index_document, str(temp_path))
+        # Run indexing asynchronously
+        doc_id = await index_document(str(temp_path))
         return {
             "status": "success",
             "doc_id": doc_id,
@@ -426,13 +365,19 @@ async def get_page_text(doc_id: str, page_num: int):
     raise HTTPException(status_code=404, detail="Page content not found")
 
 class ChatPayload(BaseModel):
-    doc_id: str
+    doc_ids: Optional[List[str]] = None
+    doc_id: Optional[str] = None
     query: str
     force_search: bool = False
 
 @app.post("/api/chat")
 async def chat_query(payload: ChatPayload):
-    generator = execute_rag_flow_stream(payload.doc_id, payload.query, payload.force_search)
+    doc_ids = payload.doc_ids
+    if not doc_ids and payload.doc_id:
+        doc_ids = [payload.doc_id]
+    if not doc_ids:
+        raise HTTPException(status_code=400, detail="No documents selected for chat.")
+    generator = execute_rag_flow_stream(doc_ids, payload.query, payload.force_search)
     return StreamingResponse(generator, media_type="text/event-stream")
 
 # Mount static files

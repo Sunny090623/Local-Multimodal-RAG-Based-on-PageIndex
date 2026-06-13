@@ -3,36 +3,50 @@
 /* Theme Colors definition */
 :root {
   /* M3 Light Colors (default fallback) */
-  --md-sys-color-primary: #6750A4;
-  --md-sys-color-on-primary: #FFFFFF;
-  --md-sys-color-primary-container: #EADDFF;
-  --md-sys-color-on-primary-container: #21005D;
-  --md-sys-color-surface: #FEF7FF;
-  --md-sys-color-surface-container: #F3EDF7;
-  --md-sys-color-surface-container-high: #ECE6F0;
-  --md-sys-color-on-surface: #1D1B20;
-  --md-sys-color-on-surface-variant: #49454F;
-  --md-sys-color-outline: #79747E;
-  --md-sys-color-error: #B3261E;
-  --md-sys-color-error-container: #F9DEDC;
-  --md-sys-color-on-error-container: #410E0B;
+  --primary-rgb: 103, 80, 164;
+  --on-primary-rgb: 255, 255, 255;
+  --primary-container-rgb: 234, 221, 255;
+  --on-primary-container-rgb: 33, 0, 93;
+  --surface-rgb: 254, 247, 255;
+  --surface-container-rgb: 243, 237, 247;
+  --surface-container-high-rgb: 236, 230, 240;
+  --on-surface-rgb: 29, 27, 32;
+  --on-surface-variant-rgb: 73, 69, 79;
+  --outline-rgb: 121, 116, 126;
+  --error-rgb: 179, 38, 30;
+  --error-container-rgb: 249, 222, 220;
+  --on-error-container-rgb: 65, 14, 11;
+
+  --md-sys-color-primary: rgb(var(--primary-rgb));
+  --md-sys-color-on-primary: rgb(var(--on-primary-rgb));
+  --md-sys-color-primary-container: rgb(var(--primary-container-rgb));
+  --md-sys-color-on-primary-container: rgb(var(--on-primary-container-rgb));
+  --md-sys-color-surface: rgb(var(--surface-rgb));
+  --md-sys-color-surface-container: rgb(var(--surface-container-rgb));
+  --md-sys-color-surface-container-high: rgb(var(--surface-container-high-rgb));
+  --md-sys-color-on-surface: rgb(var(--on-surface-rgb));
+  --md-sys-color-on-surface-variant: rgb(var(--on-surface-variant-rgb));
+  --md-sys-color-outline: rgb(var(--outline-rgb));
+  --md-sys-color-error: rgb(var(--error-rgb));
+  --md-sys-color-error-container: rgb(var(--error-container-rgb));
+  --md-sys-color-on-error-container: rgb(var(--on-error-container-rgb));
 }
 
 /* M3 Dark Colors (Activated by HTML class="dark") */
 html.dark {
-  --md-sys-color-primary: #D0BCFF;
-  --md-sys-color-on-primary: #381E72;
-  --md-sys-color-primary-container: #4F378B;
-  --md-sys-color-on-primary-container: #EADDFF;
-  --md-sys-color-surface: #141218;
-  --md-sys-color-surface-container: #211F26;
-  --md-sys-color-surface-container-high: #2B2930;
-  --md-sys-color-on-surface: #E6E1E5;
-  --md-sys-color-on-surface-variant: #CAC4D0;
-  --md-sys-color-outline: #938F99;
-  --md-sys-color-error: #F2B8B5;
-  --md-sys-color-error-container: #8C1D18;
-  --md-sys-color-on-error-container: #F9DEDC;
+  --primary-rgb: 208, 188, 255;
+  --on-primary-rgb: 56, 30, 114;
+  --primary-container-rgb: 79, 55, 139;
+  --on-primary-container-rgb: 234, 221, 255;
+  --surface-rgb: 20, 18, 24;
+  --surface-container-rgb: 33, 31, 38;
+  --surface-container-high-rgb: 43, 41, 48;
+  --on-surface-rgb: 230, 225, 229;
+  --on-surface-variant-rgb: 202, 196, 208;
+  --outline-rgb: 147, 143, 153;
+  --error-rgb: 242, 184, 181;
+  --error-container-rgb: 140, 29, 24;
+  --on-error-container-rgb: 249, 222, 220;
 }
 
 /* Base custom styles */

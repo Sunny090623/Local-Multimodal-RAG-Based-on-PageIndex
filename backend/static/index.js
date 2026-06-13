@@ -4,6 +4,8 @@ let activeDocType = 'pdf';
 let activePageNum = 1;
 let currentTab = 'image'; // 'image' or 'text'
 let documents = [];
+const selectedChatDocIds = new Set();
+let isLibraryInitialLoad = true;
 
 // DOM Elements
 const themeToggle = document.getElementById('theme-toggle');
@@ -41,8 +43,8 @@ const activeDocPages = document.getElementById('active-doc-pages');
 const chatMessages = document.getElementById('chat-messages');
 const chatInput = document.getElementById('chat-input');
 const sendBtn = document.getElementById('send-btn');
-const chatFallback = document.getElementById('chat-fallback');
-const chatForceSearch = document.getElementById('chat-force-search');
+const chatFallback = null;
+const chatForceSearch = null;
 
 const treeContainer = document.getElementById('tree-container');
 const tabImageBtn = document.getElementById('tab-image-btn');
@@ -67,6 +69,8 @@ document.addEventListener('DOMContentLoaded', () => {
   setupUploadUI();
   setupTabsUI();
   setupChatUI();
+  setupSplitPanes();
+  setupSelectAllUI();
   
   // Initial Status and Library fetch
   fetchStatus();
@@ -333,6 +337,7 @@ function handleUpload(file) {
       uploadProgressBar.classList.add('bg-green-500');
       uploadProgressBar.style.width = '100%';
       showToast(`Uploaded "${file.name}" successfully! PageIndex index tree generated.`, "success");
+      selectedChatDocIds.add(res.doc_id);
       fetchLibrary().then(() => {
         selectDocument(res.doc_id);
       });
@@ -370,6 +375,13 @@ async function fetchLibrary() {
   try {
     const res = await fetch('/api/documents');
     documents = await res.json();
+    
+    if (isLibraryInitialLoad && documents.length > 0) {
+      isLibraryInitialLoad = false;
+      documents.forEach(doc => selectedChatDocIds.add(doc.doc_id));
+      selectDocument(documents[0].doc_id);
+    }
+    
     renderLibrary();
   } catch (e) {
     console.error("Failed to query documents library", e);
@@ -377,14 +389,31 @@ async function fetchLibrary() {
 }
 
 function renderLibrary() {
+  const selectAllContainer = document.getElementById('select-all-container');
+  const selectAllCheckbox = document.getElementById('select-all-checkbox');
+  
   if (documents.length === 0) {
     docList.innerHTML = '<div class="text-xs text-on-surface-variant/70 text-center py-6">No documents indexed yet. Upload one to get started!</div>';
+    if (selectAllContainer) {
+      selectAllContainer.classList.remove('flex');
+      selectAllContainer.classList.add('hidden');
+    }
+    updateChatHeader();
     return;
+  }
+  
+  if (selectAllContainer && selectAllCheckbox) {
+    selectAllContainer.classList.remove('hidden');
+    selectAllContainer.classList.add('flex');
+    const allChecked = documents.every(doc => selectedChatDocIds.has(doc.doc_id));
+    selectAllCheckbox.checked = allChecked;
   }
   
   docList.innerHTML = documents.map(doc => {
     const isSelected = doc.doc_id === activeDocId;
     const activeClass = isSelected ? 'bg-primary/10 border-primary/40' : 'bg-surface border-outline/10 hover:bg-outline/5';
+    const isChecked = selectedChatDocIds.has(doc.doc_id);
+    const checkedAttr = isChecked ? 'checked' : '';
     
     // Choose icon based on file type
     let icon = 'draft';
@@ -399,6 +428,7 @@ function renderLibrary() {
     return `
       <div onclick="selectDocument('${doc.doc_id}')" class="p-3 border rounded-xl flex items-center justify-between cursor-pointer transition-all duration-200 ${activeClass}">
         <div class="flex items-center gap-3 min-w-0 flex-1">
+          <input type="checkbox" onclick="event.stopPropagation(); toggleChatDocument('${doc.doc_id}')" ${checkedAttr} class="w-4 h-4 rounded text-primary border-outline/30 focus:ring-primary cursor-pointer shrink-0">
           <span class="material-symbols-outlined text-primary shrink-0">${icon}</span>
           <div class="min-w-0 flex-1">
             <div class="text-xs font-semibold text-on-surface truncate pr-1" title="${doc.doc_name}">${doc.doc_name}</div>
@@ -411,6 +441,8 @@ function renderLibrary() {
       </div>
     `;
   }).join('');
+  
+  updateChatHeader();
 }
 
 async function deleteDocument(docId) {
@@ -422,10 +454,11 @@ async function deleteDocument(docId) {
     const res = await fetch(`/api/documents/${docId}`, { method: 'DELETE' });
     if (res.ok) {
       showToast("Document deleted successfully.", "success");
+      selectedChatDocIds.delete(docId);
       if (activeDocId === docId) {
         activeDocId = null;
-        activeDocTitle.textContent = "Select a Document to Chat";
-        activeDocPages.textContent = "";
+        const treeTitle = document.getElementById('inspector-tree-title');
+        if (treeTitle) treeTitle.textContent = 'DOCUMENT TREE STRUCTURE';
         treeContainer.innerHTML = '<div class="text-on-surface-variant text-center py-10">Select a document to see its structural tree outline.</div>';
         clearPageDisplay();
       }
@@ -445,17 +478,11 @@ async function selectDocument(docId) {
   const doc = documents.find(d => d.doc_id === docId);
   if (!doc) return;
   
-  // Set title
-  let icon = 'draft';
-  const ext = doc.doc_name.split('.').pop().toLowerCase();
-  if (ext === 'pdf') icon = 'picture_as_pdf';
-  else if (ext === 'docx') icon = 'description';
-  else if (['png', 'jpg', 'jpeg'].includes(ext)) icon = 'image';
-  else if (ext === 'md' || ext === 'markdown') icon = 'markdown';
+  const treeTitle = document.getElementById('inspector-tree-title');
+  if (treeTitle) {
+    treeTitle.textContent = `STRUCTURE: ${doc.doc_name}`;
+  }
   
-  activeDocIcon.textContent = icon;
-  activeDocTitle.textContent = doc.doc_name;
-  activeDocPages.textContent = doc.page_count > 0 ? `(${doc.page_count} pages)` : `(${doc.line_count} lines)`;
   activeDocType = doc.type;
   
   // Fetch details and outline tree
@@ -635,8 +662,8 @@ function setupChatUI() {
 }
 
 async function handleChatSubmit() {
-  if (!activeDocId) {
-    showToast("Please select a document first before asking questions.", "error");
+  if (selectedChatDocIds.size === 0) {
+    showToast("Please select at least one document from the library to chat.", "error");
     return;
   }
   
@@ -659,9 +686,10 @@ async function handleChatSubmit() {
   
   // Setup streaming POST payload
   const payload = {
-    doc_id: activeDocId,
+    doc_ids: Array.from(selectedChatDocIds),
+    doc_id: Array.from(selectedChatDocIds)[0] || "",
     query: query,
-    force_search: chatForceSearch.checked
+    force_search: false
   };
   
   try {
@@ -843,9 +871,11 @@ function renderCitationsFooter(container, sources, isFallback) {
         <span class="material-symbols-outlined text-xs text-primary">article</span> REFERENCED OUTLINE PAGES
       </div>
     ` + sources.map(src => {
-      const idxLabel = activeDocType === 'pdf' ? `Page ${src.page}` : `Line ${src.page}`;
+      const isPdf = src.doc_type === 'pdf';
+      const idxLabel = isPdf ? `Page ${src.page}` : `Line ${src.page}`;
+      const docNameEscaped = src.doc_name.replace(/'/g, "\\'");
       return `
-        <span onclick="inspectPage(${src.page})" class="citation-pill">
+        <span onclick="inspectSourceDocument('${docNameEscaped}', ${src.page})" class="citation-pill">
           <span class="material-symbols-outlined text-[10px]">auto_stories</span> ${idxLabel} (${src.doc_name.substring(0, 15)}...)
         </span>
       `;
@@ -874,4 +904,209 @@ function showToast(message, type = "success") {
       setTimeout(() => element.remove(), 300);
     }
   }, 4000);
+}
+
+// ── Resizable Split Panes ───────────────────────────────────────────────────
+function setupSplitPanes() {
+  const leftPanel = document.getElementById('left-panel');
+  const leftSplitter = document.getElementById('left-splitter');
+  const rightSplitter = document.getElementById('right-splitter');
+  const inspectorPanel = document.getElementById('inspector-panel');
+
+  const minLeftWidth = 280;
+  const maxLeftWidth = 500;
+  const minRightWidth = 300;
+  const maxRightWidth = 600;
+  const minCenterWidth = 400;
+
+  // Restore widths from localStorage
+  const savedLeftWidth = localStorage.getItem('split-left-width');
+  const savedRightWidth = localStorage.getItem('split-right-width');
+
+  if (savedLeftWidth && leftPanel) {
+    leftPanel.style.width = `${savedLeftWidth}px`;
+  }
+  if (savedRightWidth && inspectorPanel) {
+    inspectorPanel.style.width = `${savedRightWidth}px`;
+  }
+
+  // Left splitter drag logic
+  if (leftSplitter && leftPanel) {
+    leftSplitter.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      document.body.style.cursor = 'col-resize';
+      
+      const startX = e.clientX;
+      const startWidth = leftPanel.offsetWidth;
+      
+      function onMouseMove(moveEvent) {
+        const currentClientX = moveEvent.clientX;
+        window.requestAnimationFrame(() => {
+          const deltaX = currentClientX - startX;
+          let newWidth = startWidth + deltaX;
+          
+          if (newWidth < minLeftWidth) newWidth = minLeftWidth;
+          if (newWidth > maxLeftWidth) newWidth = maxLeftWidth;
+          
+          // Verify that center panel remains at least minCenterWidth
+          const totalWidth = document.body.clientWidth;
+          const rightWidth = inspectorPanel ? inspectorPanel.offsetWidth : 0;
+          const currentCenterWidth = totalWidth - newWidth - rightWidth - 10;
+          if (currentCenterWidth < minCenterWidth) {
+            newWidth = totalWidth - rightWidth - minCenterWidth - 10;
+            if (newWidth < minLeftWidth) newWidth = minLeftWidth;
+          }
+          
+          leftPanel.style.width = `${newWidth}px`;
+          localStorage.setItem('split-left-width', newWidth);
+        });
+      }
+      
+      function onMouseUp() {
+        document.body.style.cursor = '';
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      }
+      
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  }
+
+  // Right splitter drag logic
+  if (rightSplitter && inspectorPanel) {
+    rightSplitter.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      document.body.style.cursor = 'col-resize';
+      
+      const startX = e.clientX;
+      const startWidth = inspectorPanel.offsetWidth;
+      
+      function onMouseMove(moveEvent) {
+        const currentClientX = moveEvent.clientX;
+        window.requestAnimationFrame(() => {
+          const deltaX = startX - currentClientX;
+          let newWidth = startWidth + deltaX;
+          
+          if (newWidth < minRightWidth) newWidth = minRightWidth;
+          if (newWidth > maxRightWidth) newWidth = maxRightWidth;
+          
+          // Verify that center panel remains at least minCenterWidth
+          const totalWidth = document.body.clientWidth;
+          const leftWidth = leftPanel ? leftPanel.offsetWidth : 0;
+          const currentCenterWidth = totalWidth - leftWidth - newWidth - 10;
+          if (currentCenterWidth < minCenterWidth) {
+            newWidth = totalWidth - leftWidth - minCenterWidth - 10;
+            if (newWidth < minRightWidth) newWidth = minRightWidth;
+          }
+          
+          inspectorPanel.style.width = `${newWidth}px`;
+          localStorage.setItem('split-right-width', newWidth);
+        });
+      }
+      
+      function onMouseUp() {
+        document.body.style.cursor = '';
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      }
+      
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  }
+}
+
+// ── Multi-Document Chat Selection Helpers ────────────────────────────────────
+function toggleChatDocument(docId) {
+  if (selectedChatDocIds.has(docId)) {
+    selectedChatDocIds.delete(docId);
+  } else {
+    selectedChatDocIds.add(docId);
+  }
+  renderLibrary();
+}
+
+function toggleSelectAll() {
+  const selectAllCheckbox = document.getElementById('select-all-checkbox');
+  if (!selectAllCheckbox) return;
+  
+  const checked = selectAllCheckbox.checked;
+  if (checked) {
+    documents.forEach(doc => selectedChatDocIds.add(doc.doc_id));
+  } else {
+    selectedChatDocIds.clear();
+  }
+  renderLibrary();
+}
+
+function setupSelectAllUI() {
+  const selectAllContainer = document.getElementById('select-all-container');
+  const selectAllCheckbox = document.getElementById('select-all-checkbox');
+  
+  if (selectAllContainer && selectAllCheckbox) {
+    selectAllContainer.addEventListener('click', (e) => {
+      if (e.target !== selectAllCheckbox) {
+        selectAllCheckbox.checked = !selectAllCheckbox.checked;
+      }
+      toggleSelectAll();
+    });
+  }
+}
+
+function updateChatHeader() {
+  const activeDocIcon = document.getElementById('active-doc-icon');
+  const activeDocTitle = document.getElementById('active-doc-title');
+  const activeDocPages = document.getElementById('active-doc-pages');
+  
+  if (!activeDocIcon || !activeDocTitle || !activeDocPages) return;
+  
+  const selectedCount = selectedChatDocIds.size;
+  if (selectedCount === 0) {
+    activeDocIcon.textContent = 'chat_bubble_outline';
+    activeDocTitle.textContent = 'No documents selected for chat';
+    activeDocPages.textContent = '';
+  } else if (selectedCount === 1) {
+    const docId = Array.from(selectedChatDocIds)[0];
+    const doc = documents.find(d => d.doc_id === docId);
+    if (doc) {
+      let icon = 'draft';
+      const ext = doc.doc_name.split('.').pop().toLowerCase();
+      if (ext === 'pdf') icon = 'picture_as_pdf';
+      else if (ext === 'docx') icon = 'description';
+      else if (['png', 'jpg', 'jpeg'].includes(ext)) icon = 'image';
+      else if (ext === 'md' || ext === 'markdown') icon = 'markdown';
+      
+      activeDocIcon.textContent = icon;
+      activeDocTitle.textContent = doc.doc_name;
+      activeDocPages.textContent = doc.page_count > 0 ? `(${doc.page_count} pages)` : `(${doc.line_count} lines)`;
+    }
+  } else {
+    activeDocIcon.textContent = 'question_answer';
+    activeDocTitle.textContent = `Chatting with ${selectedCount} documents`;
+    
+    let totalPages = 0;
+    let totalLines = 0;
+    selectedChatDocIds.forEach(id => {
+      const doc = documents.find(d => d.doc_id === id);
+      if (doc) {
+        if (doc.page_count > 0) totalPages += doc.page_count;
+        else totalLines += doc.line_count;
+      }
+    });
+    
+    if (totalPages > 0) {
+      activeDocPages.textContent = `(${totalPages} pages total)`;
+    } else {
+      activeDocPages.textContent = `(${totalLines} lines total)`;
+    }
+  }
+}
+
+async function inspectSourceDocument(docName, page) {
+  const doc = documents.find(d => d.doc_name === docName);
+  if (doc) {
+    await selectDocument(doc.doc_id);
+    inspectPage(page);
+  }
 }

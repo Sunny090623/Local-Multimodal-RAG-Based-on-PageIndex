@@ -13,7 +13,6 @@ from backend.provider import (
     check_ollama_status, check_xinference_status, get_active_provider, set_active_provider,
     get_vlm_provider, set_vlm_provider
 )
-from backend.rag import execute_web_search
 from backend.shared import get_shared_client, STORAGE_DIR, WORKSPACE_DIR
 
 class TestRAGBackend(unittest.TestCase):
@@ -32,22 +31,6 @@ class TestRAGBackend(unittest.TestCase):
         self.assertEqual(settings.provider_type, "ollama")
         self.assertTrue(settings.use_vlm)
 
-    def test_web_search(self):
-        # Test DuckDuckGo search API fallback is functioning
-        results, err = asyncio.run(execute_web_search("Python Programming"))
-        
-        # Check if rate-limited or successful
-        if err:
-            print(f"Warning: DuckDuckGo search returned an error: {err}")
-            # Ensure it is caught gracefully as a string description
-            self.assertIsInstance(err, str)
-        else:
-            self.assertTrue(len(results) >= 0)
-            if len(results) > 0:
-                self.assertIn("url", results[0])
-                self.assertIn("title", results[0])
-                self.assertIn("snippet", results[0])
-                print(f"DuckDuckGo search successful: found {len(results)} items.")
 
     def test_status_checks(self):
         # Test status check executes without throwing
@@ -90,7 +73,7 @@ class TestIndexDocument(unittest.TestCase):
             # This will fail if LLM is not available, which is expected in CI
             # We just verify the function doesn't crash with asyncio errors
             try:
-                doc_id = index_document(str(test_file))
+                doc_id = asyncio.run(index_document(str(test_file)))
                 self.assertIsInstance(doc_id, str)
                 self.assertTrue(len(doc_id) > 0)
                 
@@ -142,7 +125,7 @@ class TestIndexDocument(unittest.TestCase):
                 f.write("test")
             
             with self.assertRaises(ValueError) as ctx:
-                index_document(str(test_file))
+                asyncio.run(index_document(str(test_file)))
             
             self.assertIn("Unsupported file format", str(ctx.exception))
             print(f"Unsupported format test passed: {ctx.exception}")
@@ -155,7 +138,7 @@ class TestIndexDocument(unittest.TestCase):
         from backend.parser import index_document
         
         with self.assertRaises(FileNotFoundError):
-            index_document("/nonexistent/path/document.pdf")
+            asyncio.run(index_document("/nonexistent/path/document.pdf"))
 
 
 class TestRAGFlowEdgeCases(unittest.TestCase):

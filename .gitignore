@@ -12,6 +12,11 @@ bug.md
 bugfix_log.md
 prompt.md
 
+
+# Ignore test files
+/backend/storage/images/*.png
+/backend/storage/workspace/*.json
+
 # Ignore settings
 /backend/storage/*.json
 

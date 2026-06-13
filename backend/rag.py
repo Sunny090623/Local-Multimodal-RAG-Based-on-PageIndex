@@ -5,7 +5,6 @@ import logging
 import litellm
 import asyncio
 from pathlib import Path
-from duckduckgo_search import DDGS
 
 # Ensure backend modules and PageIndex package can be imported
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -16,10 +15,6 @@ from backend.shared import get_shared_client as get_document_client
 from pageindex.utils import extract_json, remove_fields
 
 logger = logging.getLogger(__name__)
-
-# Global switch to enable/disable web search fallback.
-# Set to False per user request to avoid blocking errors/local network issues.
-WEB_SEARCH_ENABLED = False
 
 async def run_llm_query(prompt, system_prompt=None):
     """Utility to run standard completions using active patched litellm."""
@@ -128,28 +123,6 @@ Response Format (return ONLY valid JSON, no markdown block, no explanation):
         logger.error(f"Error checking sufficiency: {e}", exc_info=True)
         return {"sufficient": False, "search_query": query, "thinking": "Error during sufficiency check, fallback to search"}
 
-async def execute_web_search(search_query):
-    """Executes DuckDuckGo search with strict exception handling and rate-limiting safety."""
-    search_results = []
-    error_msg = None
-    
-    try:
-        with DDGS() as ddgs:
-            results = ddgs.text(search_query, max_results=5)
-            if results:
-                for r in results:
-                    search_results.append({
-                        "title": r.get("title", ""),
-                        "url": r.get("href", r.get("url", "")),
-                        "snippet": r.get("body", "")
-                    })
-    except Exception as e:
-        err_str = str(e)
-        logger.error(f"DuckDuckGo search fallback failed: {err_str}")
-        error_msg = err_str
-        
-    return search_results, error_msg
-
 def get_document_fallback_context(doc_id: str, client) -> str:
     """Retrieves a fallback context from the document (either full text or node summaries)."""
     doc_info = client.documents.get(doc_id)
@@ -200,197 +173,105 @@ def get_document_fallback_context(doc_id: str, client) -> str:
     return "\n".join(summaries)
 
 # Generator-based Streaming RAG Flow
-async def execute_rag_flow_stream(doc_id, query, force_search=False):
-    """Streams status updates and generated response tokens."""
-    logger.info(f"RAG query: {query!r} for doc_id: {doc_id!r} (force_search={force_search})")
+async def execute_rag_flow_stream(doc_ids, query, force_search=False):
+    """Streams status updates and generated response tokens across multiple documents."""
+    if isinstance(doc_ids, str):
+        doc_ids = [doc_ids]
+        
+    logger.info(f"RAG query: {query!r} for doc_ids: {doc_ids!r}")
     client = get_document_client()
-    doc_info = client.documents.get(doc_id)
-    if not doc_info:
-        yield json.dumps({"type": "error", "content": f"Document {doc_id} not found."}) + "\n"
+    
+    valid_docs = []
+    for d in doc_ids:
+        doc_info = client.documents.get(d)
+        if doc_info:
+            valid_docs.append((d, doc_info))
+            
+    if not valid_docs:
+        yield json.dumps({"type": "error", "content": f"Selected documents {doc_ids} not found."}) + "\n"
         return
         
-    client._ensure_doc_loaded(doc_id)
-    structure = doc_info.get("structure", [])
-    doc_type = doc_info.get("type", "pdf")
-    doc_name = doc_info.get("doc_name", "document")
-    
-    pages_inspected = []
+    pages_inspected = [] # Will contain dict items: {"page": p, "doc_name": doc_name, "doc_type": doc_type}
+    combined_context = ""
     fallback_active = False
-    search_results = []
-    err = None
+    matched_any = False
     
-    # Check if forced search is on
-    if force_search:
-        if not WEB_SEARCH_ENABLED:
-            yield json.dumps({"type": "status", "content": "Web Search is currently disabled. Generating direct response using LLM..."}) + "\n"
-            prompt = f"""Answer the user query based on your general knowledge.
+    yield json.dumps({"type": "status", "content": "Analyzing structure trees for selected documents..."}) + "\n"
+    
+    for doc_id, doc_info in valid_docs:
+        client._ensure_doc_loaded(doc_id)
+        structure = doc_info.get("structure", [])
+        doc_type = doc_info.get("type", "pdf")
+        doc_name = doc_info.get("doc_name", "document")
+        
+        pages_str = await route_query_to_pages(doc_id, query, doc_type, structure)
+        if pages_str != "none" and pages_str:
+            yield json.dumps({"type": "status", "content": f"Outline matches in {doc_name} at: pages/lines {pages_str}. Retrieving context..."}) + "\n"
+            try:
+                content_json_str = client.get_page_content(doc_id, pages_str)
+                logger.info(f"Retrieved content for {doc_name} pages {pages_str}: {content_json_str[:200]}...")
+                content_list = json.loads(content_json_str)
+                
+                if "error" not in content_list:
+                    doc_context = ""
+                    for c in content_list:
+                        doc_context += f"--- {doc_name} Page/Line {c['page']} ---\n{c['content']}\n\n"
+                        pages_inspected.append({
+                            "page": c['page'],
+                            "doc_name": doc_name,
+                            "doc_type": doc_type
+                        })
+                    combined_context += doc_context
+                    matched_any = True
+            except Exception as e:
+                logger.error(f"Error fetching page content for {doc_name}: {e}")
+                
+    if matched_any and combined_context:
+        yield json.dumps({"type": "status", "content": "Evaluating context sufficiency across selected documents..."}) + "\n"
+        check_res = await check_sufficiency_and_answer(query, combined_context, "selected pages")
+        logger.info(f"Sufficiency check result: {check_res}")
+        
+        if check_res.get("sufficient") is True:
+            yield json.dumps({"type": "status", "content": "Context is sufficient. Stream-answering..."}) + "\n"
+            
+            prompt = f"""Answer the user query using ONLY the provided document contexts. Cite specific document names and page/line numbers in your answer.
+            
+Document Contexts:
+{combined_context}
 
 User Query:
 {query}
 """
             async for token in run_llm_query_stream(prompt):
                 yield json.dumps({"type": "delta", "content": token}) + "\n"
-            yield json.dumps({"type": "result", "answer": "", "sources": [], "fallback": True, "pages_inspected": []}) + "\n"
-            return
-
-        fallback_active = True
-        yield json.dumps({"type": "status", "content": "Web Search forced by settings. Executing search..."}) + "\n"
-        search_results, err = await execute_web_search(query)
-        
-        if err:
-            logger.error(f"Forced search failed: {err}")
-            is_rate_lim = "403" in err or "Forbidden" in err or "rate" in err.lower()
-            err_msg = "Web search fallback failed: Local search blocked (rate-limited), please check connection." if is_rate_lim else f"Web search fallback failed: Local search blocked, please check connection. (Error: {err})"
-            yield json.dumps({"type": "error", "content": err_msg}) + "\n"
-            yield json.dumps({"type": "result", "answer": err_msg, "sources": [], "fallback": True, "pages_inspected": []}) + "\n"
-            return
-            
-        yield json.dumps({"type": "status", "content": f"Found {len(search_results)} search results. Generating answer..."}) + "\n"
-        
-        context_str = ""
-        sources = []
-        for idx, r in enumerate(search_results, 1):
-            context_str += f"[{idx}] Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}\n\n"
-            sources.append({"id": idx, "title": r["title"], "url": r["url"]})
-            
-        prompt = f"""You are a web search grounding assistant. Answer the user query using the provided web search context.
-Cite the source numbers in brackets (e.g. [1], [2]) corresponding to the index of search results when stating facts.
-
-Web Search Context:
-{context_str}
-
-User Query:
-{query}
-"""
-        async for token in run_llm_query_stream(prompt):
-            yield json.dumps({"type": "delta", "content": token}) + "\n"
-            
-        yield json.dumps({"type": "result", "answer": "", "sources": sources, "fallback": True, "pages_inspected": []}) + "\n"
-        return
-
-    # Normal RAG search routing
-    yield json.dumps({"type": "status", "content": "Analyzing document structure tree..."}) + "\n"
-    pages_str = await route_query_to_pages(doc_id, query, doc_type, structure)
-    
-    context_str = ""
-    if pages_str == "none" or not pages_str:
-        fallback_active = True
-        if not WEB_SEARCH_ENABLED:
-            yield json.dumps({"type": "status", "content": "Query not matching document outline. Web search is disabled, preparing to generate document-priority response..."}) + "\n"
-        else:
-            yield json.dumps({"type": "status", "content": "Query not matching document outline. Triggering Web search fallback..."}) + "\n"
-            search_results, err = await execute_web_search(query)
-    else:
-        yield json.dumps({"type": "status", "content": f"Outline matches found at: pages/lines {pages_str}. Retrieving context..."}) + "\n"
-        try:
-            content_json_str = client.get_page_content(doc_id, pages_str)
-            logger.info(f"Retrieved page content for pages {pages_str}: {content_json_str[:200]}...")
-            content_list = json.loads(content_json_str)
-            
-            if "error" in content_list:
-                raise ValueError(content_list["error"])
                 
-            for c in content_list:
-                context_str += f"--- Page {c['page']} ---\n{c['content']}\n\n"
-                pages_inspected.append(c['page'])
-        except Exception as e:
-            logger.error(f"Error fetching page content: {e}")
-            context_str = ""
-            
-        if not context_str:
+            yield json.dumps({"type": "result", "answer": "", "sources": pages_inspected, "fallback": False, "pages_inspected": pages_inspected}) + "\n"
+            return
+        else:
             fallback_active = True
-            if not WEB_SEARCH_ENABLED:
-                yield json.dumps({"type": "status", "content": "Could not read page contents. Web search is disabled, preparing to generate document-priority response..."}) + "\n"
-            else:
-                yield json.dumps({"type": "status", "content": "Could not read page contents. Triggering Web search fallback..."}) + "\n"
-                search_results, err = await execute_web_search(query)
-        else:
-            yield json.dumps({"type": "status", "content": "Evaluating context sufficiency..."}) + "\n"
-            check_res = await check_sufficiency_and_answer(query, context_str, pages_str)
-            logger.info(f"Sufficiency check result: {check_res}")
-            
-            if check_res.get("sufficient") is True:
-                # Answer is sufficient, stream the pre-generated answer or stream a final generation using the context
-                yield json.dumps({"type": "status", "content": "Document context is sufficient. Stream-answering..."}) + "\n"
-                
-                # Stream synthesis to make response lively
-                prompt = f"""Answer the user query using ONLY the provided document context. Cite specific page numbers in your answer.
-                
-Document Context:
-{context_str}
-
-User Query:
-{query}
-"""
-                async for token in run_llm_query_stream(prompt):
-                    yield json.dumps({"type": "delta", "content": token}) + "\n"
-                    
-                sources = [{"page": p, "doc_name": doc_name} for p in pages_inspected]
-                yield json.dumps({"type": "result", "answer": "", "sources": sources, "fallback": False, "pages_inspected": pages_inspected}) + "\n"
-                return
-            else:
-                fallback_active = True
-                search_q = check_res.get("search_query", query)
-                if not WEB_SEARCH_ENABLED:
-                    yield json.dumps({"type": "status", "content": "Document context insufficient. Web search is disabled, preparing to generate document-priority response..."}) + "\n"
-                else:
-                    yield json.dumps({"type": "status", "content": f"Document context insufficient. Triggering Web search for: '{search_q}'..."}) + "\n"
-                    search_results, err = await execute_web_search(search_q)
-
-    # If fallback is active, stream search response
+            yield json.dumps({"type": "status", "content": "Selected contexts insufficient. Preparing to generate grounded response from all selected documents..."}) + "\n"
+    else:
+         fallback_active = True
+         yield json.dumps({"type": "status", "content": "Query not matching document outline. Preparing to generate grounded response from all selected documents..."}) + "\n"
+         
     if fallback_active:
-        if not WEB_SEARCH_ENABLED:
-            # Generate fallback context from the document if available
-            fallback_context = context_str
-            if not fallback_context and doc_id:
-                fallback_context = get_document_fallback_context(doc_id, client)
-            logger.info(f"Fallback context retrieved: {len(fallback_context)} characters.")
+        # Ground in fallback context of all selected documents
+        combined_fallback = ""
+        for doc_id, doc_info in valid_docs:
+            doc_name = doc_info.get("doc_name", "document")
+            fallback_ctx = get_document_fallback_context(doc_id, client)
+            if fallback_ctx:
+                combined_fallback += f"=== Content from {doc_name} ===\n{fallback_ctx}\n\n"
                 
-            yield json.dumps({"type": "status", "content": "Generating grounded answer from document..."}) + "\n"
-            
-            prompt = f"""You are a helpful assistant. Answer the user query using the provided document context as the primary and highest priority source of truth.
+        logger.info(f"Fallback context retrieved: {len(combined_fallback)} characters.")
+        yield json.dumps({"type": "status", "content": "Generating grounded answer from selected documents..."}) + "\n"
+        
+        prompt = f"""You are a helpful assistant. Answer the user query using the provided document context as the primary and highest priority source of truth.
 If the query is a general greeting or conversational message, respond naturally.
-Otherwise, answer based strictly on the document context. If the context does not contain the information needed to answer the query, state that the document does not mention it.
+Otherwise, answer based strictly on the document context. If the context does not contain the information needed to answer the query, state that the documents do not mention it.
 
 Document Context:
-{fallback_context}
-
-User Query:
-{query}
-"""
-            async for token in run_llm_query_stream(prompt):
-                yield json.dumps({"type": "delta", "content": token}) + "\n"
-                
-            yield json.dumps({"type": "result", "answer": "", "sources": [], "fallback": True, "pages_inspected": pages_inspected}) + "\n"
-            return
-
-        if err:
-            logger.error(f"Web search fallback failed: {err}")
-            is_rate_lim = "403" in err or "Forbidden" in err or "rate" in err.lower()
-            err_msg = "Web search fallback failed: Local search blocked (rate-limited), please check connection." if is_rate_lim else f"Web search fallback failed: Local search blocked, please check connection. (Error: {err})"
-            yield json.dumps({"type": "error", "content": err_msg}) + "\n"
-            yield json.dumps({"type": "result", "answer": err_msg, "sources": [], "fallback": True, "pages_inspected": pages_inspected}) + "\n"
-            return
-            
-        if not search_results:
-            msg = "Document content is insufficient, and web search returned no results."
-            yield json.dumps({"type": "error", "content": msg}) + "\n"
-            yield json.dumps({"type": "result", "answer": msg, "sources": [], "fallback": True, "pages_inspected": pages_inspected}) + "\n"
-            return
-            
-        yield json.dumps({"type": "status", "content": f"Found {len(search_results)} search results. Synthesizing final answer..."}) + "\n"
-        
-        context_str = ""
-        sources = []
-        for idx, r in enumerate(search_results, 1):
-            context_str += f"[{idx}] Title: {r['title']}\nURL: {r['url']}\nSnippet: {r['snippet']}\n\n"
-            sources.append({"id": idx, "title": r["title"], "url": r["url"]})
-            
-        prompt = f"""You are a web search grounding assistant. Answer the user query using the provided web search context.
-Cite the source numbers in brackets (e.g. [1], [2]) corresponding to the index of search results when stating facts.
-
-Web Search Context:
-{context_str}
+{combined_fallback}
 
 User Query:
 {query}
@@ -398,4 +279,5 @@ User Query:
         async for token in run_llm_query_stream(prompt):
             yield json.dumps({"type": "delta", "content": token}) + "\n"
             
-        yield json.dumps({"type": "result", "answer": "", "sources": sources, "fallback": True, "pages_inspected": pages_inspected}) + "\n"
+        yield json.dumps({"type": "result", "answer": "", "sources": [], "fallback": True, "pages_inspected": pages_inspected}) + "\n"
+        return
