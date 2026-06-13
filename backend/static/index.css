@@ -1,0 +1,180 @@
+/* Material You (Material 3) CSS Design Tokens */
+
+/* Theme Colors definition */
+:root {
+  /* M3 Light Colors (default fallback) */
+  --md-sys-color-primary: #6750A4;
+  --md-sys-color-on-primary: #FFFFFF;
+  --md-sys-color-primary-container: #EADDFF;
+  --md-sys-color-on-primary-container: #21005D;
+  --md-sys-color-surface: #FEF7FF;
+  --md-sys-color-surface-container: #F3EDF7;
+  --md-sys-color-surface-container-high: #ECE6F0;
+  --md-sys-color-on-surface: #1D1B20;
+  --md-sys-color-on-surface-variant: #49454F;
+  --md-sys-color-outline: #79747E;
+  --md-sys-color-error: #B3261E;
+  --md-sys-color-error-container: #F9DEDC;
+  --md-sys-color-on-error-container: #410E0B;
+}
+
+/* M3 Dark Colors (Activated by HTML class="dark") */
+html.dark {
+  --md-sys-color-primary: #D0BCFF;
+  --md-sys-color-on-primary: #381E72;
+  --md-sys-color-primary-container: #4F378B;
+  --md-sys-color-on-primary-container: #EADDFF;
+  --md-sys-color-surface: #141218;
+  --md-sys-color-surface-container: #211F26;
+  --md-sys-color-surface-container-high: #2B2930;
+  --md-sys-color-on-surface: #E6E1E5;
+  --md-sys-color-on-surface-variant: #CAC4D0;
+  --md-sys-color-outline: #938F99;
+  --md-sys-color-error: #F2B8B5;
+  --md-sys-color-error-container: #8C1D18;
+  --md-sys-color-on-error-container: #F9DEDC;
+}
+
+/* Base custom styles */
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+}
+
+/* Scrollbar customizations (thin, rounded) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(147, 143, 153, 0.3);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(147, 143, 153, 0.5);
+}
+
+/* Animations and transitions */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-bubble {
+  animation: fadeIn 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* Outline tree animations and styling */
+.tree-node-title:hover {
+  background-color: rgba(var(--md-sys-color-primary), 0.08);
+}
+
+/* M3 switch micro-animation */
+input:checked ~ div::after {
+  transform: translateX(100%);
+  background-color: var(--md-sys-color-on-primary);
+}
+
+/* Interactive citations links */
+.citation-pill {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background-color: rgba(208, 188, 255, 0.25);
+  color: var(--md-sys-color-primary);
+  border: 1px solid rgba(208, 188, 255, 0.4);
+  transition: all 0.2s ease;
+}
+
+html.dark .citation-pill {
+  background-color: rgba(79, 55, 139, 0.3);
+  border: 1px solid rgba(111, 86, 172, 0.4);
+}
+
+.citation-pill:hover {
+  background-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border-color: var(--md-sys-color-primary);
+  transform: translateY(-1px);
+}
+
+/* Glassmorphism utility card */
+.glass-card {
+  background: rgba(33, 31, 38, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(147, 143, 153, 0.15);
+}
+
+/* Markdown styling inside structured viewer */
+article p {
+  margin-bottom: 0.75rem;
+}
+
+article h1, article h2, article h3, article h4 {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 700;
+  color: var(--md-sys-color-primary);
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+article h1 { font-size: 1.25rem; }
+article h2 { font-size: 1.1rem; }
+article h3 { font-size: 1rem; }
+
+article blockquote {
+  border-left: 3px solid var(--md-sys-color-primary);
+  padding-left: 0.75rem;
+  font-style: italic;
+  color: var(--md-sys-color-on-surface-variant);
+  margin: 0.75rem 0;
+}
+
+article code {
+  font-family: monospace;
+  background-color: rgba(147, 143, 153, 0.15);
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+article pre {
+  background-color: rgba(147, 143, 153, 0.08);
+  border: 1px solid rgba(147, 143, 153, 0.15);
+  padding: 0.75rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+
+article ul, article ol {
+  padding-left: 1.25rem;
+  margin-bottom: 0.75rem;
+  list-style-type: disc;
+}
+
+article ol {
+  list-style-type: decimal;
+}
+
+article li {
+  margin-bottom: 0.25rem;
+}

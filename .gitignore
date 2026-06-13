@@ -1,0 +1,39 @@
+# Ignore the nested Git repositories
+/PageIndex/
+/inference/
+/ollama/
+/ragflow/
+
+# Ignore logs
+/logs/
+Log.txt
+PLAN.md
+bug.md
+bugfix_log.md
+prompt.md
+
+# Ignore settings
+/backend/storage/*.json
+
+# Python caching
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Environment variables
+.env
+.env.*
+.venv/
+env/
+venv/
+ENV/
+
+# Editor files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
