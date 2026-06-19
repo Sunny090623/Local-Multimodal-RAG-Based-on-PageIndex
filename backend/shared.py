@@ -8,11 +8,7 @@ instead of creating their own PageIndexClient instances. This ensures:
 3. No redundant disk reads on every API request
 """
 
-import sys
 from pathlib import Path
-
-# Ensure PageIndex package is importable
-sys.path.insert(0, str(Path(__file__).parent.parent / "PageIndex"))
 
 from pageindex import PageIndexClient
 

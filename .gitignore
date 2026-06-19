@@ -19,6 +19,9 @@ prompt.md
 **/*.pyo
 **/*.pyd
 
+# Test Files
+/tests/
+
 # Environment variables
 .env
 .env.*

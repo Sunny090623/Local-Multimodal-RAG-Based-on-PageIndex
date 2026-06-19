@@ -7,11 +7,11 @@ An agentic, vectorless, local multimodal RAG application designed to index, expl
 ## 🌟 Key Features
 
 1. **Multi-Document Chat Selection**: Pick one or more documents from your library using checkboxes to serve as the context for your chat queries.
-2. **Agentic Page Routing**: The RAG pipeline queries the document's outline tree first, routing the user query to specific page ranges or lines containing the answers, minimizing context window clutter.
-3. **Hybrid PDF Parsing**: PyMuPDF extracts digital text layers, while VLM (e.g. via local Ollama/Xinference) transcribes scanned pages, diagrams, or visual assets into structured Markdown. Fallbacks are automatically managed.
-4. **Interactive Page Inspector**: The right panel features a dual-view (Original Page Image / Structured Markdown Text). Clickable citation pills in the chat bubble automatically switch the inspected document and focus on the cited page.
-5. **Adjustable Split Layout**: Clean Material 3 style layout with drag-resizable split panes (Left Settings, Center Chat, Right Inspector) that persist pane widths in `localStorage`.
-6. **Isolated Configurations**: API keys and model parameters are saved in separate configuration files (`settings_chat.json` and `settings_vlm.json`) and kept out of Git.
+2. **Agentic Section/Node-Level Routing**: The RAG pipeline queries the document's outline tree first, routing queries to specific section nodes instead of flat pages. It retrieves the precise text chunk of the matched section, minimizing context window clutter.
+3. **Hybrid PDF Parsing & Bookmarks Extraction**: PyMuPDF extracts digital text layers and native table-of-contents bookmarks. If bookmarks are missing, it heals the outline by scanning page content for missing references or header structures. VLM is used optionally to transcribe scanned images/charts.
+4. **Interactive Node Inspector**: The right inspector panel features a dual-view (Original Page Image / Structured Markdown Text of the active section). Clickable citation pills in the chat automatically switch the inspected document and focus on the cited page.
+5. **Robust Document Actions**: Rename, delete, and download original files directly from the Library actions menu. Renaming syncs disk image directories and upload paths, and deleting cleans up all cached files cleanly.
+6. **Adjustable Split Layout**: Clean Material 3 style layout with drag-resizable split panes (Left Settings, Center Chat, Right Inspector) that persist pane widths in `localStorage`.
 
 ---
 

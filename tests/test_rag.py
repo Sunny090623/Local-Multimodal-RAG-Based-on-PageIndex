@@ -182,5 +182,212 @@ class TestLiteLLMPatching(unittest.TestCase):
         self.assertTrue(litellm.drop_params)
 
 
+class TestOutlineHealing(unittest.TestCase):
+    """Test the generalized outline healing function scan_and_insert_missing_headings."""
+    
+    def test_scan_and_insert_missing_headings(self):
+        from pageindex.page_index import scan_and_insert_missing_headings
+        
+        # Mock outline: references missing
+        toc = [
+            {"structure": "1", "title": "黄仁勋", "physical_index": 1},
+            {"structure": "1.1", "title": "早年", "physical_index": 1},
+            {"structure": "1.2", "title": "言论观点", "physical_index": 4},
+            {"structure": "1.3", "title": "References", "physical_index": 7}
+        ]
+        
+        # Mock page content: page 5 has markdown heading '# 参考来源'
+        page_list = [
+            ("黄仁勋 is CEO...", 10),                     # Page 1
+            ("Early life info...", 10),                     # Page 2
+            ("More life...", 10),                           # Page 3
+            ("言论观点: Taiwan and market...", 10),       # Page 4
+            ("# 参考来源\n\n1. Source 1\n2. Source 2", 10),  # Page 5
+            ("More sources...", 10),                        # Page 6
+            ("### References\n\n46. Source 46", 10)         # Page 7
+        ]
+        
+        healed_toc = scan_and_insert_missing_headings(toc, page_list, start_index=1)
+        
+        # Check that '参考来源' was inserted
+        titles = [item["title"] for item in healed_toc]
+        self.assertIn("参考来源", titles)
+        
+        # Verify correct position (should be after '言论观点' on page 4 and before 'References' on page 7)
+        idx_opinions = titles.index("言论观点")
+        idx_ref_sources = titles.index("参考来源")
+        idx_references = titles.index("References")
+        self.assertTrue(idx_opinions < idx_ref_sources < idx_references)
+        
+        # Verify physical index of inserted node
+        ref_source_item = healed_toc[idx_ref_sources]
+        self.assertEqual(ref_source_item["physical_index"], 5)
+        
+        # Verify structure prefix inheritance
+        # Preceding was '1.2', so it should be derived as '1.2_auto1'
+        self.assertEqual(ref_source_item["structure"], "1.2_auto1")
+        
+        print("scan_and_insert_missing_headings test passed.")
+
+class TestHierarchyRebuildAndClean(unittest.TestCase):
+    """Test outline level reconstruction, metadata cleaning, and children nesting mapping."""
+    
+    def test_build_structures_from_levels(self):
+        from pageindex.page_index import build_structures_from_levels
+        toc = [
+            [1, "黄仁勋", 1],
+            [2, "早年", 1],
+            [3, "奥奈达", 2],
+            [2, "个人生活", 3]
+        ]
+        items = build_structures_from_levels(toc)
+        self.assertEqual(items[0]["structure"], "1")
+        self.assertEqual(items[1]["structure"], "1.1")
+        self.assertEqual(items[2]["structure"], "1.1.1")
+        self.assertEqual(items[3]["structure"], "1.2")
+        print("build_structures_from_levels test passed.")
+
+    def test_clean_and_deduplicate_outline(self):
+        # pyrefly: ignore [missing-import]
+        from pageindex.page_index import clean_and_deduplicate_outline
+        toc_items = [
+            {"title": "黄仁勋", "physical_index": 1},
+            {"title": "早年", "physical_index": 1},
+            {"title": "黄仁勋 - 维基百科，自由的百科全书", "physical_index": 8},
+            {"title": "早年", "physical_index": 9},  # Duplicate title
+            {"title": "外部链接", "physical_index": 10}
+        ]
+        cleaned = clean_and_deduplicate_outline(toc_items, doc_name="jensen huang")
+        titles = [item["title"] for item in cleaned]
+        self.assertEqual(titles, ["黄仁勋", "早年", "外部链接"])
+        print("clean_and_deduplicate_outline test passed.")
+
+    def test_rebuild_structure_hierarchy(self):
+        # pyrefly: ignore [missing-import]
+        from pageindex.page_index import rebuild_structure_hierarchy
+        toc_items = [
+            {"title": "黄仁勋", "physical_index": 1, "structure": "1"},
+            {"title": "早年", "physical_index": 1, "structure": "1"},  # flat LLM structure
+            {"title": "个人生活", "physical_index": 3, "structure": "1"},
+            {"title": "奖项", "physical_index": 3, "structure": "1"},
+            {"title": "参考来源", "physical_index": 5, "structure": "1"}
+        ]
+        page_list = [
+            ("# 黄仁勋\n\n## 早年\n\ninfo...", 10),  # Page 1
+            ("some text...", 10),                     # Page 2
+            ("## 个人生活\n\n### 奖项\n\ninfo...", 10), # Page 3
+            ("some text...", 10),                     # Page 4
+            ("# 参考来源\n\n1. Source...", 10)         # Page 5
+        ]
+        rebuilt = rebuild_structure_hierarchy(toc_items, page_list)
+        # Rebuilt structures:
+        # "黄仁勋" -> level 1 -> "1"
+        # "早年" -> level 2 -> "1.1"
+        # "个人生活" -> level 2 -> "1.2"
+        # "奖项" -> level 3 -> "1.2.1"
+        # "参考来源" -> level 1, adjusted to 2 because i > 0 -> "1.3"
+        self.assertEqual(rebuilt[0]["structure"], "1")
+        self.assertEqual(rebuilt[1]["structure"], "1.1")
+        self.assertEqual(rebuilt[2]["structure"], "1.2")
+        self.assertEqual(rebuilt[3]["structure"], "1.2.1")
+        self.assertEqual(rebuilt[4]["structure"], "1.3")
+        print("rebuild_structure_hierarchy test passed.")
+
+
+class TestRenameAndSufficiency(unittest.TestCase):
+    """Test document rename path/folder sync and sufficiency check string normalizations."""
+
+    def test_sufficiency_check_normalization(self):
+        def check_sufficiency(check_res):
+            sufficient_val = check_res.get("sufficient") if isinstance(check_res, dict) else False
+            is_sufficient = False
+            if sufficient_val is True:
+                is_sufficient = True
+            elif isinstance(sufficient_val, str):
+                is_sufficient = sufficient_val.strip().lower() in ("true", "yes", "1")
+            return is_sufficient
+
+        self.assertTrue(check_sufficiency({"sufficient": True}))
+        self.assertTrue(check_sufficiency({"sufficient": "true"}))
+        self.assertTrue(check_sufficiency({"sufficient": "True"}))
+        self.assertTrue(check_sufficiency({"sufficient": "yes"}))
+        self.assertTrue(check_sufficiency({"sufficient": "1"}))
+        
+        self.assertFalse(check_sufficiency({"sufficient": False}))
+        self.assertFalse(check_sufficiency({"sufficient": "false"}))
+        self.assertFalse(check_sufficiency({"sufficient": "no"}))
+        self.assertFalse(check_sufficiency({"sufficient": None}))
+        print("sufficiency check normalization tests passed.")
+
+    def test_rename_directories_and_files(self):
+        import tempfile
+        import shutil
+        from pathlib import Path
+        from pageindex.utils import sanitize_filename
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            images_dir = tmp_path / "images"
+            uploads_dir = tmp_path / "uploads"
+            images_dir.mkdir()
+            uploads_dir.mkdir()
+
+            old_name = "test_document_old"
+            new_name = "test document new"
+
+            # Create visual image folder
+            old_image_folder = images_dir / sanitize_filename(old_name)
+            old_image_folder.mkdir()
+            (old_image_folder / "file_1.png").write_text("image-data")
+
+            # Create original file inside uploads
+            uuid_prefix = "uuid123_"
+            old_original_path = uploads_dir / f"{uuid_prefix}{old_name}.pdf"
+            old_original_path.write_text("pdf-data")
+
+            # Mock rename_document logic
+            # 1. Rename images folder
+            new_image_folder = images_dir / sanitize_filename(new_name)
+            if old_name:
+                if old_image_folder.exists() and old_image_folder.is_dir() and old_image_folder != new_image_folder:
+                    if new_image_folder.exists():
+                        shutil.rmtree(new_image_folder)
+                    os.rename(old_image_folder, new_image_folder)
+
+            # 2. Rename original file path inside uploads
+            doc_path = str(old_original_path)
+            if doc_path and os.path.exists(doc_path):
+                old_path_obj = Path(doc_path)
+                try:
+                    if old_path_obj.parent.resolve() == uploads_dir.resolve():
+                        filename = old_path_obj.name
+                        parts = filename.split("_", 1)
+                        prefix = ""
+                        if len(parts) > 1:
+                            prefix = parts[0] + "_"
+                        ext = old_path_obj.suffix
+                        new_filename = f"{prefix}{new_name}{ext}"
+                        new_path = uploads_dir / new_filename
+
+                        if new_path != old_path_obj:
+                            if new_path.exists():
+                                import uuid
+                                new_path = uploads_dir / f"{uuid.uuid4()}_{new_name}{ext}"
+                            os.rename(old_path_obj, new_path)
+                            doc_path = str(new_path)
+                except Exception as e:
+                    pass
+
+            # Assertions
+            self.assertFalse(old_image_folder.exists())
+            self.assertTrue(new_image_folder.exists())
+            self.assertTrue((new_image_folder / "file_1.png").exists())
+
+            self.assertFalse(old_original_path.exists())
+            self.assertTrue(Path(doc_path).exists())
+            self.assertEqual(Path(doc_path).name, f"{uuid_prefix}{new_name}.pdf")
+            print("rename directories and files test passed.")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1028,40 +1028,261 @@ async def process_large_node_recursively(node, page_list, opt=None, logger=None)
     
     return node
 
-async def tree_parser(page_list, opt, doc=None, logger=None):
-    check_toc_result = check_toc(page_list, opt)
-    logger.info(check_toc_result)
+def build_structures_from_levels(toc_list):
+    """
+    Converts a native PyMuPDF TOC list [lvl, title, page] into list of dicts with structure paths.
+    """
+    result = []
+    current_counters = {}
+    for lvl, title, page in toc_list:
+        # Reset counters for deeper levels
+        for k in list(current_counters.keys()):
+            if k > lvl:
+                del current_counters[k]
+        
+        # Ensure parent levels exist
+        for i in range(1, lvl):
+            if i not in current_counters:
+                current_counters[i] = 1
+        
+        # Increment leaf level
+        if lvl in current_counters:
+            current_counters[lvl] += 1
+        else:
+            current_counters[lvl] = 1
+        
+        # Build structure string
+        parts = [str(current_counters[i]) for i in range(1, lvl + 1)]
+        struct_str = ".".join(parts)
+        
+        result.append({
+            "structure": struct_str,
+            "title": title,
+            "physical_index": page
+        })
+    return result
 
-    if check_toc_result.get("toc_content") and check_toc_result["toc_content"].strip() and check_toc_result["page_index_given_in_toc"] == "yes":
-        toc_with_page_number = await meta_processor(
-            page_list, 
-            mode='process_toc_with_page_numbers', 
-            start_index=1, 
-            toc_content=check_toc_result['toc_content'], 
-            toc_page_list=check_toc_result['toc_page_list'], 
-            opt=opt,
-            logger=logger)
-    else:
-        toc_with_page_number = await meta_processor(
-            page_list, 
-            mode='process_no_toc', 
-            start_index=1, 
-            opt=opt,
-            logger=logger)
 
-    toc_with_page_number = add_preface_if_needed(toc_with_page_number)
-    toc_with_page_number = await check_title_appearance_in_start_concurrent(toc_with_page_number, page_list, model=opt.model, logger=logger)
+def clean_and_deduplicate_outline(toc_items, doc_name=""):
+    """
+    Cleans metadata/headers/footers (like '维基百科', '自由的百科全书') from the toc items.
+    Also deduplicates identical adjacent or repeated titles.
+    """
+    cleaned = []
+    seen_titles = set()
     
-    # Filter out items with None physical_index before post_processings
+    for item in toc_items:
+        title = item.get('title', '').strip()
+        if not title:
+            continue
+            
+        title_lower = title.lower()
+        
+        # Skip duplicate titles (exact match, case insensitive)
+        title_norm = re.sub(r'\s+', '', title_lower)
+        if title_norm in seen_titles:
+            continue
+            
+        # Clean duplicate/metadata headers like '黄仁勋 - 维基百科，自由的百科全书'
+        # But allow it if it's the very first node (possible document root)
+        if len(seen_titles) > 0:
+            if "维基百科" in title or "自由的百科全书" in title or "wikipedia" in title_lower:
+                continue
+                
+        seen_titles.add(title_norm)
+        cleaned.append(item)
+        
+    return cleaned
+
+
+def rebuild_structure_hierarchy(toc_items, page_list):
+    """
+    Scans the pages in page_list to find the actual heading level (number of '#' characters)
+    for each toc item, and then rebuilds the hierarchical 'structure' string.
+    Forces nested structure under a single root node (the first node) by preventing i > 0 nodes
+    from having level 1.
+    """
+    item_levels = []
+    
+    def clean_t(t):
+        return re.sub(r'[\s_\-\d\*\#`\(\)]+', '', t.lower())
+        
+    for i, item in enumerate(toc_items):
+        title = item.get('title', '')
+        page_num = item.get('physical_index')
+        level = None
+        
+        # Search page_num (1-based)
+        search_pages = []
+        if page_num is not None:
+            for offset in [0, -1, 1]:
+                idx = page_num - 1 + offset
+                if 0 <= idx < len(page_list):
+                    search_pages.append(page_list[idx][0])
+                    
+        cleaned_title = clean_t(title)
+        
+        # Look for markdown heading matching the title
+        for page_text in search_pages:
+            lines = page_text.split('\n')
+            for line in lines:
+                line_stripped = line.strip()
+                if line_stripped.startswith('#'):
+                    m = re.match(r'^(#+)\s*(.+)$', line_stripped)
+                    if m:
+                        hashes = m.group(1)
+                        heading_text = m.group(2)
+                        heading_text = re.sub(r'[\*\#`_]', '', heading_text).strip()
+                        if clean_t(heading_text) == cleaned_title:
+                            level = len(hashes)
+                            break
+            if level is not None:
+                break
+                
+        # Fallback to LLM structure depth
+        if level is None and item.get('structure'):
+            parts = str(item['structure']).split('.')
+            if len(parts) > 1:
+                level = len(parts)
+                
+        # Ultimate fallback
+        if level is None:
+            lower_title = title.lower()
+            if any(k in lower_title for k in ["参考来源", "参考文献", "外部链接", "references", "bibliography"]):
+                level = 2
+            else:
+                level = 2
+                
+        # If it's not the first node, and it resolved to level 1, change to level 2
+        # to ensure it nests under the first node (which acts as the document root).
+        if i > 0 and level == 1:
+            level = 2
+            
+        item_levels.append((item, level))
+        
+    # Rebuild structures based on levels
+    rebuilt_items = []
+    current_counters = {}
+    
+    for item, lvl in item_levels:
+        if lvl is None or lvl <= 0:
+            lvl = 1
+            
+        # Reset deeper levels
+        for k in list(current_counters.keys()):
+            if k > lvl:
+                del current_counters[k]
+                
+        # Ensure parent levels exist
+        for i in range(1, lvl):
+            if i not in current_counters:
+                current_counters[i] = 1
+                
+        # Increment leaf level
+        if lvl in current_counters:
+            current_counters[lvl] += 1
+        else:
+            current_counters[lvl] = 1
+        
+        # Build structure string
+        parts = [str(current_counters[i]) for i in range(1, lvl + 1)]
+        struct_str = ".".join(parts)
+        
+        new_item = dict(item)
+        new_item["structure"] = struct_str
+        rebuilt_items.append(new_item)
+        
+    return rebuilt_items
+
+
+async def tree_parser(page_list, opt, doc=None, logger=None):
+    # 1. Try native PDF TOC first
+    native_toc_items = None
+    if doc:
+        try:
+            import pymupdf
+            if isinstance(doc, str) and os.path.isfile(doc) and doc.lower().endswith(".pdf"):
+                pdf_doc = pymupdf.open(doc)
+                toc = pdf_doc.get_toc()
+                pdf_doc.close()
+            elif hasattr(doc, 'read'):
+                pdf_doc = pymupdf.open(stream=doc, filetype="pdf")
+                toc = pdf_doc.get_toc()
+                pdf_doc.close()
+            else:
+                toc = None
+                
+            if toc:
+                native_toc_items = build_structures_from_levels(toc)
+                if logger:
+                    logger.info(f"Successfully extracted native TOC with {len(native_toc_items)} items")
+        except Exception as e:
+            if logger:
+                logger.error(f"Error reading native TOC: {e}")
+
+    if native_toc_items:
+        toc_with_page_number = native_toc_items
+    else:
+        # 2. Fall back to LLM-based outline extraction
+        check_toc_result = check_toc(page_list, opt)
+        if logger:
+            logger.info(check_toc_result)
+
+        if check_toc_result.get("toc_content") and check_toc_result["toc_content"].strip() and check_toc_result["page_index_given_in_toc"] == "yes":
+            toc_with_page_number = await meta_processor(
+                page_list, 
+                mode='process_toc_with_page_numbers', 
+                start_index=1, 
+                toc_content=check_toc_result['toc_content'], 
+                toc_page_list=check_toc_result['toc_page_list'], 
+                opt=opt,
+                logger=logger)
+        else:
+            toc_with_page_number = await meta_processor(
+                page_list, 
+                mode='process_no_toc', 
+                start_index=1, 
+                opt=opt,
+                logger=logger)
+
+        toc_with_page_number = add_preface_if_needed(toc_with_page_number)
+        toc_with_page_number = await check_title_appearance_in_start_concurrent(toc_with_page_number, page_list, model=opt.model, logger=logger)
+    
+    # 3. Filtering & Healing
     valid_toc_items = [item for item in toc_with_page_number if item.get('physical_index') is not None]
     
+    # Clean and deduplicate outline
+    doc_name = get_pdf_name(doc) if doc else ""
+    valid_toc_items = clean_and_deduplicate_outline(valid_toc_items, doc_name)
+    
+    # Healing missing headings
+    valid_toc_items = scan_and_insert_missing_headings(valid_toc_items, page_list, start_index=1)
+    
+    # Rebuild hierarchical structure
+    valid_toc_items = rebuild_structure_hierarchy(valid_toc_items, page_list)
+    
+    # 4. Post-processing to tree
     toc_tree = post_processing(valid_toc_items, len(page_list))
+
     tasks = [
         process_large_node_recursively(node, page_list, opt, logger=logger)
         for node in toc_tree
     ]
     await asyncio.gather(*tasks)
     
+    # 5. Populate children/page lists recursively in post-recursed tree for complete safety
+    def ensure_children_and_page(node):
+        node['page'] = node.get('start_index')
+        if 'nodes' in node and node['nodes']:
+            node['children'] = node['nodes']
+            for child in node['nodes']:
+                ensure_children_and_page(child)
+        else:
+            node['children'] = []
+            
+    for node in toc_tree:
+        ensure_children_and_page(node)
+        
     return toc_tree
 
 
@@ -1154,3 +1375,120 @@ def validate_and_truncate_physical_indices(toc_with_page_number, page_list_lengt
         print(f"Truncated {len(truncated_items)} TOC items that exceeded document length")
      
     return toc_with_page_number
+
+
+def scan_and_insert_missing_headings(toc_with_page_number, page_list, start_index=1):
+    """
+    Scans document page texts to find any major headings (using markdown syntax or high-signal keywords)
+    that are not present in the parsed outline structure list, and inserts them back in.
+    This heals outline gaps and prevents text content from cross-section bleeding.
+    """
+    import re
+    # 1. Extract all headings from page_list pages
+    detected_headings = [] # list of (page_num, title, level)
+    
+    md_heading_pattern = re.compile(r'^\s*(#+)\s*(.+)$', re.M)
+    
+    structural_keywords = {
+        "参考来源", "参考文献", "references", "bibliography", "附录", "appendix", 
+        "致谢", "acknowledgements", "前言", "preface", "目录", "contents", 
+        "总结", "summary", "结论", "conclusion", "引言", "introduction", 
+        "概述", "overview"
+    }
+    
+    for i, page_data in enumerate(page_list):
+        page_text = page_data[0]
+        page_num = start_index + i
+        
+        lines = page_text.split('\n')
+        for line in lines:
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+                
+            # Check markdown heading
+            md_match = md_heading_pattern.match(line_stripped)
+            if md_match:
+                level = len(md_match.group(1))
+                title = md_match.group(2).strip()
+                # Clean markdown/formatting characters
+                title = re.sub(r'[\*\_`#]', '', title).strip()
+                if 2 <= len(title) <= 80:
+                    detected_headings.append((page_num, title, level))
+                    continue
+                    
+            # Check high-signal structural keywords on their own line
+            title_lower = line_stripped.lower()
+            if title_lower in structural_keywords:
+                detected_headings.append((page_num, line_stripped, 2))
+                
+    if not detected_headings:
+        return toc_with_page_number
+
+    # Normalize helper for deduplication
+    def normalize_title(t):
+        return re.sub(r'\s+', '', t).lower()
+
+    # 2. Filter out already existing headings
+    new_headings = []
+    for page_num, title, level in detected_headings:
+        norm_title = normalize_title(title)
+        is_duplicate = False
+        for item in toc_with_page_number:
+            if normalize_title(item.get('title', '')) == norm_title:
+                # Same or adjacent page -> duplicate
+                if item.get('physical_index') is not None and abs(item['physical_index'] - page_num) <= 1:
+                    is_duplicate = True
+                    break
+        if not is_duplicate:
+            new_headings.append({"title": title, "physical_index": page_num, "level": level})
+
+    if not new_headings:
+        return toc_with_page_number
+
+    # 3. Insert and build structures
+    # Sort new headings by physical_index
+    new_headings.sort(key=lambda x: x['physical_index'])
+    
+    # We will build a new combined list
+    combined = list(toc_with_page_number)
+    
+    # Counter for uniqueness
+    counter = 1
+    
+    for new_head in new_headings:
+        page_num = new_head['physical_index']
+        title = new_head['title']
+        
+        # Find insertion index in combined list
+        insert_idx = len(combined)
+        for idx, item in enumerate(combined):
+            if item.get('physical_index') is not None and item['physical_index'] > page_num:
+                insert_idx = idx
+                break
+                
+        # Find preceding node to inherit structure path
+        prev_node = None
+        if insert_idx > 0:
+            prev_node = combined[insert_idx - 1]
+            
+        # Determine structure key
+        if prev_node and prev_node.get('structure'):
+            prev_struct = prev_node['structure']
+            parts = str(prev_struct).split('.')
+            parts[-1] = f"{parts[-1]}_auto{counter}"
+            new_struct = '.'.join(parts)
+        else:
+            new_struct = f"1_auto{counter}"
+            
+        counter += 1
+        
+        new_item = {
+            "structure": new_struct,
+            "title": title,
+            "physical_index": page_num
+        }
+        
+        combined.insert(insert_idx, new_item)
+        
+    return combined

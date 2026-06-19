@@ -2,7 +2,6 @@
 let activeDocId = null;
 let activeDocType = 'pdf';
 let activePageNum = 1;
-let activeNodeId = null; // Track active outline node for section text retrieval
 let currentTab = 'image'; // 'image' or 'text'
 let documents = [];
 const selectedChatDocIds = new Set();
@@ -623,7 +622,6 @@ function renderLibrary() {
     else if (ext === 'md' || ext === 'markdown') icon = 'markdown';
     
     const metricText = doc.page_count > 0 ? `${doc.page_count} pages` : `${doc.line_count} lines`;
-    const docNameEscaped = doc.doc_name.replace(/'/g, "\\'").replace(/"/g, '&quot;');
     
     return `
       <div onclick="selectDocument('${doc.doc_id}')" class="p-3 border rounded-xl flex items-center justify-between cursor-pointer transition-all duration-200 ${activeClass}">
@@ -635,24 +633,9 @@ function renderLibrary() {
             <div class="text-[10px] text-on-surface-variant/80 font-medium mt-0.5">${metricText}</div>
           </div>
         </div>
-        <div class="relative shrink-0 ml-1">
-          <button onclick="event.stopPropagation(); toggleDocActionsMenu(event, '${doc.doc_id}')" class="p-1.5 rounded-lg hover:bg-outline/10 text-on-surface-variant hover:text-primary transition-colors" title="Document Actions">
-            <span class="material-symbols-outlined text-base">more_vert</span>
-          </button>
-          
-          <div id="actions-menu-${doc.doc_id}" class="hidden absolute right-0 mt-1 w-36 bg-surface-container-high border border-outline/15 rounded-xl shadow-xl z-50 flex flex-col py-1 text-xs text-on-surface">
-            <button onclick="event.stopPropagation(); renameDocumentPrompt('${doc.doc_id}', '${docNameEscaped}')" class="flex items-center gap-2 px-3 py-2 hover:bg-outline/10 text-on-surface text-left transition-colors font-medium">
-              <span class="material-symbols-outlined text-sm">edit</span> Rename
-            </button>
-            <button onclick="event.stopPropagation(); window.open('/api/documents/${doc.doc_id}/view', '_blank')" class="flex items-center gap-2 px-3 py-2 hover:bg-outline/10 text-on-surface text-left transition-colors font-medium">
-              <span class="material-symbols-outlined text-sm">open_in_new</span> View Original
-            </button>
-            <hr class="border-outline/10 my-1">
-            <button onclick="event.stopPropagation(); deleteDocument('${doc.doc_id}')" class="flex items-center gap-2 px-3 py-2 hover:bg-red-500/10 text-red-500 hover:text-red-600 text-left transition-colors font-medium">
-              <span class="material-symbols-outlined text-sm">delete</span> Delete
-            </button>
-          </div>
-        </div>
+        <button onclick="event.stopPropagation(); deleteDocument('${doc.doc_id}')" class="p-1.5 rounded-lg hover:bg-red-500/10 text-on-surface-variant hover:text-red-500 transition-colors" title="Delete from index">
+          <span class="material-symbols-outlined text-base">delete</span>
+        </button>
       </div>
     `;
   }).join('');
@@ -722,14 +705,13 @@ function renderTree(structure) {
   }
   
   function buildTreeNodeHTML(node) {
-    const childrenList = node.children || node.nodes;
-    const hasChildren = childrenList && childrenList.length > 0;
-    const targetIdx = node.page !== undefined ? node.page : (node.start_index !== undefined ? node.start_index : (node.line_num !== undefined ? node.line_num : 1));
+    const hasChildren = node.nodes && node.nodes.length > 0;
+    const targetIdx = node.start_index !== undefined ? node.start_index : (node.line_num !== undefined ? node.line_num : 1);
     const metricLabel = activeDocType === 'pdf' ? `p. ${targetIdx}` : `L ${targetIdx}`;
     
     let html = `
       <div class="tree-node flex flex-col pl-2 border-l border-outline/10 ml-1 mt-1">
-        <div class="flex items-center justify-between p-1.5 rounded-lg hover:bg-outline/10 group cursor-pointer transition-colors" onclick="event.stopPropagation(); inspectNode('${node.node_id}', ${targetIdx})">
+        <div class="flex items-center justify-between p-1.5 rounded-lg hover:bg-outline/10 group cursor-pointer transition-colors" onclick="event.stopPropagation(); inspectPage(${targetIdx})">
           <div class="flex items-center gap-1.5 min-w-0 flex-1">
             ${hasChildren ? `
               <button onclick="event.stopPropagation(); toggleNodeCollapse(this)" class="p-0.5 rounded hover:bg-outline/20 flex items-center justify-center shrink-0">
@@ -744,7 +726,7 @@ function renderTree(structure) {
     
     if (hasChildren) {
       html += `<div class="node-children flex flex-col pl-2 mt-0.5 space-y-0.5">`;
-      childrenList.forEach(child => {
+      node.nodes.forEach(child => {
         html += buildTreeNodeHTML(child);
       });
       html += `</div>`;
@@ -809,17 +791,8 @@ function clearPageDisplay() {
 
 function inspectPage(idx) {
   activePageNum = idx;
-  activeNodeId = null; // Clear active node when page is manually selected or default
   
-  if (activeDocId) {
-    loadPageContent();
-  }
-}
-
-function inspectNode(nodeId, pageNum) {
-  activeNodeId = nodeId;
-  activePageNum = pageNum;
-  
+  // Highlighting active visual in tree could be done, but let's load content first
   if (activeDocId) {
     loadPageContent();
   }
@@ -858,22 +831,14 @@ async function loadPageContent() {
     textViewerPlaceholder.classList.remove('hidden');
     
     try {
-      let url;
-      if (activeNodeId) {
-        url = `/api/documents/${activeDocId}/nodes/${activeNodeId}/text`;
-      } else {
-        url = `/api/documents/${activeDocId}/pages/${activePageNum}/text`;
-      }
-      const res = await fetch(url);
+      const res = await fetch(`/api/documents/${activeDocId}/pages/${activePageNum}/text`);
       if (res.ok) {
         const data = await res.json();
         textViewerPlaceholder.classList.add('hidden');
         pageTextDisplay.innerHTML = marked.parse(data.content || '');
         pageTextDisplay.classList.remove('hidden');
       } else {
-        textViewerPlaceholder.textContent = activeNodeId 
-          ? `Content not found for section node ${activeNodeId}`
-          : `Content not found at page/line index ${activePageNum}`;
+        textViewerPlaceholder.textContent = `Content not found at page/line index ${activePageNum}`;
         textViewerPlaceholder.classList.remove('hidden');
       }
     } catch (e) {
@@ -1066,35 +1031,13 @@ function loggerErrorBubble(messageId, errorMsg) {
 
 // ── Interactive Citation Pill Replacement ───────────────────────────────────
 function renderCitationsInText(text, sources) {
-  if (sources && sources.length > 0) {
-    const sourceMap = {};
-    sources.forEach(src => {
-      if (src.citation_id !== undefined) {
-        sourceMap[src.citation_id] = src;
-      }
-    });
-    
-    // Replace [1] with interactive pill for inspectSourceDocument
-    text = text.replace(/\[(\d+)\]/g, (match, citationId) => {
-      const src = sourceMap[citationId];
-      if (src) {
-        const isPdf = src.doc_type === 'pdf';
-        const label = isPdf ? `p. ${src.page}` : `L ${src.page}`;
-        const docNameEscaped = src.doc_name.replace(/'/g, "\\'");
-        const docIdEscaped = src.doc_id ? src.doc_id.replace(/'/g, "\\'") : '';
-        return `<span class="citation-pill" onclick="inspectSourceDocument('${docNameEscaped}', ${src.page}, '${docIdEscaped}')"><span class="material-symbols-outlined text-[10px]">auto_stories</span>[${citationId}] ${label}</span>`;
-      }
-      return match;
-    });
-  } else {
-    // Matches references like [Page 4], [4], [L 4], [Line 4] (legacy fallback)
-    text = text.replace(/\[(?:Page\s+)?(\d+)\]/gi, (match, pageNum) => {
-      return `<span class="citation-pill" onclick="inspectPage(${pageNum})"><span class="material-symbols-outlined text-[10px]">auto_stories</span>Page ${pageNum}</span>`;
-    });
-    text = text.replace(/\[(?:Line\s+|L\s+)?(\d+)\]/gi, (match, lineNum) => {
-      return `<span class="citation-pill" onclick="inspectPage(${lineNum})"><span class="material-symbols-outlined text-[10px]">subject</span>L ${lineNum}</span>`;
-    });
-  }
+  // Matches references like [Page 4], [4], [L 4], [Line 4]
+  text = text.replace(/\[(?:Page\s+)?(\d+)\]/gi, (match, pageNum) => {
+    return `<span class="citation-pill" onclick="inspectPage(${pageNum})"><span class="material-symbols-outlined text-[10px]">auto_stories</span>Page ${pageNum}</span>`;
+  });
+  text = text.replace(/\[(?:Line\s+|L\s+)?(\d+)\]/gi, (match, lineNum) => {
+    return `<span class="citation-pill" onclick="inspectPage(${lineNum})"><span class="material-symbols-outlined text-[10px]">subject</span>L ${lineNum}</span>`;
+  });
   return marked.parse(text);
 }
 
@@ -1106,10 +1049,7 @@ function renderCitationsFooter(container, sources, isFallback) {
   
   container.classList.remove('hidden');
   
-  // Detect if these are web search sources or document sources
-  const isWebSearch = isFallback && sources[0] && sources[0].url !== undefined;
-  
-  if (isWebSearch) {
+  if (isFallback) {
     // Web search fallback sources
     container.innerHTML = `
       <div class="w-full text-[10px] text-on-surface-variant font-bold mb-1.5 flex items-center gap-1">
@@ -1132,11 +1072,9 @@ function renderCitationsFooter(container, sources, isFallback) {
       const isPdf = src.doc_type === 'pdf';
       const idxLabel = isPdf ? `Page ${src.page}` : `Line ${src.page}`;
       const docNameEscaped = src.doc_name.replace(/'/g, "\\'");
-      const docIdEscaped = src.doc_id ? src.doc_id.replace(/'/g, "\\'") : '';
-      const citationPrefix = src.citation_id ? `[${src.citation_id}] ` : '';
       return `
-        <span onclick="inspectSourceDocument('${docNameEscaped}', ${src.page}, '${docIdEscaped}')" class="citation-pill">
-          <span class="material-symbols-outlined text-[10px]">auto_stories</span> ${citationPrefix}${idxLabel} (${src.doc_name.substring(0, 15)}...)
+        <span onclick="inspectSourceDocument('${docNameEscaped}', ${src.page})" class="citation-pill">
+          <span class="material-symbols-outlined text-[10px]">auto_stories</span> ${idxLabel} (${src.doc_name.substring(0, 15)}...)
         </span>
       `;
     }).join('');
@@ -1407,74 +1345,10 @@ function updateChatHeader() {
   }
 }
 
-async function inspectSourceDocument(docName, page, docId = null) {
-  let doc = null;
-  if (docId) {
-    doc = documents.find(d => d.doc_id === docId);
-  }
-  if (!doc) {
-    doc = documents.find(d => d.doc_name === docName);
-  }
+async function inspectSourceDocument(docName, page) {
+  const doc = documents.find(d => d.doc_name === docName);
   if (doc) {
     await selectDocument(doc.doc_id);
     inspectPage(page);
-  }
-}
-
-function toggleDocActionsMenu(event, docId) {
-  // Hide all other menus first
-  document.querySelectorAll('[id^="actions-menu-"]').forEach(menu => {
-    if (menu.id !== `actions-menu-${docId}`) {
-      menu.classList.add('hidden');
-    }
-  });
-
-  const menu = document.getElementById(`actions-menu-${docId}`);
-  if (menu) {
-    menu.classList.toggle('hidden');
-    
-    if (!menu.classList.contains('hidden')) {
-      const hideMenu = () => {
-        menu.classList.add('hidden');
-        document.removeEventListener('click', hideMenu);
-      };
-      setTimeout(() => {
-        document.addEventListener('click', hideMenu);
-      }, 50);
-    }
-  }
-}
-
-async function renameDocumentPrompt(docId, oldName) {
-  const menu = document.getElementById(`actions-menu-${docId}`);
-  if (menu) menu.classList.add('hidden');
-
-  const newName = prompt("Enter new display name for the document:", oldName);
-  if (newName === null) return;
-  
-  const trimmed = newName.trim();
-  if (!trimmed) {
-    showToast("Document name cannot be empty.", "error");
-    return;
-  }
-  
-  if (trimmed === oldName) return;
-  
-  try {
-    const res = await fetch(`/api/documents/${docId}/rename`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ new_name: trimmed })
-    });
-    
-    if (res.ok) {
-      showToast("Document renamed successfully.", "success");
-      await fetchLibrary();
-    } else {
-      const err = await res.json();
-      showToast(`Rename failed: ${err.detail || 'Unknown error'}`, "error");
-    }
-  } catch (e) {
-    showToast(`Error renaming document: ${e.message}`, "error");
   }
 }

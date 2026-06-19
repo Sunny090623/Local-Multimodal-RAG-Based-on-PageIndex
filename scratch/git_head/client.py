@@ -156,7 +156,9 @@ class PageIndexClient:
 
     def _save_doc(self, doc_id: str):
         doc = self.documents[doc_id].copy()
-        # Keep text in structure nodes for heading-based chunk retrieval
+        # Strip text from structure nodes — redundant with pages (PDF only)
+        if doc.get('structure') and doc.get('type') == 'pdf':
+            doc['structure'] = remove_fields(doc['structure'], fields=['text'])
         path = self.workspace / f"{doc_id}.json"
         with open(path, "w", encoding="utf-8") as f:
             json.dump(doc, f, ensure_ascii=False, indent=2)

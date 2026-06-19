@@ -338,10 +338,8 @@ def list_to_tree(data):
         node = {
             'title': item.get('title'),
             'start_index': item.get('start_index'),
-            'page': item.get('start_index'),
             'end_index': item.get('end_index'),
-            'nodes': [],
-            'children': []
+            'nodes': []
         }
         
         nodes[structure] = node
@@ -353,7 +351,6 @@ def list_to_tree(data):
             # Add as child to parent if parent exists
             if parent_structure in nodes:
                 nodes[parent_structure]['nodes'].append(node)
-                nodes[parent_structure]['children'].append(node)
             else:
                 root_nodes.append(node)
         else:
@@ -364,7 +361,6 @@ def list_to_tree(data):
     def clean_node(node):
         if not node['nodes']:
             del node['nodes']
-            del node['children']
         else:
             for child in node['nodes']:
                 clean_node(child)
@@ -554,94 +550,15 @@ def convert_page_to_int(data):
 
 
 def add_node_text(node, pdf_pages):
-    import re
-    # Helper to flatten the tree in pre-order traversal
-    def flatten_tree(structure):
-        flat = []
-        if isinstance(structure, dict):
-            flat.append(structure)
-            for child in structure.get('nodes', []):
-                flat.extend(flatten_tree(child))
-        elif isinstance(structure, list):
-            for item in structure:
-                flat.extend(flatten_tree(item))
-        return flat
-
-    # Helper to get all descendant node IDs of a node
-    def get_descendant_node_ids(n):
-        descendants = set()
-        def traverse(curr):
-            for child in curr.get('nodes', []):
-                if child.get('node_id'):
-                    descendants.add(child['node_id'])
-                traverse(child)
-        traverse(n)
-        return descendants
-
-    # Flatten nodes
-    nodes_flat = flatten_tree(node)
-    if not nodes_flat:
-        return
-
-    # Construct full_text and page offsets
-    full_text = ""
-    page_offsets = {}
-    for i, page in enumerate(pdf_pages):
-        page_num = i + 1
-        page_offsets[page_num] = len(full_text)
-        full_text += page[0]
-    # Page count + 1 offset is end of text
-    page_offsets[len(pdf_pages) + 1] = len(full_text)
-
-    # Monotonic search for start index of each heading in full_text
-    last_found_position = 0
-    for n in nodes_flat:
-        start_page = n.get('start_index')
-        if start_page is None:
-            n['pos'] = last_found_position
-            continue
-
-        page_start_pos = page_offsets.get(start_page, 0)
-        search_start = max(last_found_position, page_start_pos)
-
-        title = n.get('title', '')
-        pos = -1
-        if title:
-            # Exact match first
-            pos = full_text.find(title, search_start)
-            if pos == -1:
-                # Fuzzy match ignoring spaces
-                pattern_parts = [re.escape(c) for c in title if c.strip()]
-                if pattern_parts:
-                    pattern = r'\s*'.join(pattern_parts)
-                    match = re.search(pattern, full_text[search_start:], re.IGNORECASE)
-                    if match:
-                        pos = search_start + match.start()
-
-        if pos != -1:
-            n['pos'] = pos
-            last_found_position = pos
-        else:
-            n['pos'] = search_start
-
-    # Slice text contents from heading-to-heading boundaries
-    for i, n in enumerate(nodes_flat):
-        descendants = get_descendant_node_ids(n)
-        
-        # End position is the start position of the first subsequent node that is not a descendant
-        end_pos = len(full_text)
-        for j in range(i + 1, len(nodes_flat)):
-            next_node = nodes_flat[j]
-            if next_node.get('node_id') not in descendants:
-                end_pos = next_node['pos']
-                break
-        
-        # Extract node text
-        n['text'] = full_text[n['pos']:end_pos]
-
-    # Clean up the temporary 'pos' property
-    for n in nodes_flat:
-        n.pop('pos', None)
+    if isinstance(node, dict):
+        start_page = node.get('start_index')
+        end_page = node.get('end_index')
+        node['text'] = get_text_of_pdf_pages(pdf_pages, start_page, end_page)
+        if 'nodes' in node:
+            add_node_text(node['nodes'], pdf_pages)
+    elif isinstance(node, list):
+        for index in range(len(node)):
+            add_node_text(node[index], pdf_pages)
     return
 
 

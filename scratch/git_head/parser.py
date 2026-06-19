@@ -12,10 +12,12 @@ import docx
 import requests
 import litellm
 
+# Add PageIndex to path to reuse existing modules
+sys.path.insert(0, str(Path(__file__).parent.parent / "PageIndex"))
 
 from pageindex.page_index import tree_parser
 from pageindex.page_index_md import md_to_tree
-from pageindex.utils import ConfigLoader, write_node_id, generate_summaries_for_structure, JsonLogger, add_node_text, sanitize_filename
+from pageindex.utils import ConfigLoader, write_node_id, generate_summaries_for_structure, JsonLogger, add_node_text
 from backend.provider import get_active_provider, get_vlm_provider, active_chat_provider
 from backend.shared import get_shared_client, STORAGE_DIR, WORKSPACE_DIR, IMAGES_DIR
 
@@ -116,10 +118,8 @@ async def parse_image(file_path, doc_id):
     doc_name = os.path.basename(file_path)
     ext = os.path.splitext(file_path)[1].lower()
     
-    # Save the original image in our storage under its folder
-    doc_folder = IMAGES_DIR / sanitize_filename(doc_name)
-    doc_folder.mkdir(parents=True, exist_ok=True)
-    cached_img_path = doc_folder / f"{doc_id}_1.png"
+    # Save the original image in our storage
+    cached_img_path = IMAGES_DIR / f"{doc_id}_1.png"
     # Convert/copy to png
     import shutil
     shutil.copy(file_path, cached_img_path)
@@ -146,53 +146,49 @@ async def parse_image(file_path, doc_id):
 
 async def parse_pdf_hybrid(file_path, doc_id):
     """Performs hybrid text/visual PDF parsing."""
+    doc = fitz.open(file_path)
     pages = []
     
-    doc_name = os.path.basename(file_path)
-    doc_folder = IMAGES_DIR / sanitize_filename(doc_name)
-    doc_folder.mkdir(parents=True, exist_ok=True)
-    
-    with fitz.open(file_path) as doc:
-        for i in range(len(doc)):
-            page_num = i + 1
-            page = doc[i]
+    for i in range(len(doc)):
+        page_num = i + 1
+        page = doc[i]
+        
+        # Check text content and images
+        raw_text = page.get_text().strip()
+        image_list = page.get_images()
+        
+        page_text = ""
+        cached_img_path = IMAGES_DIR / f"{doc_id}_{page_num}.png"
+        
+        # Scanned page or contains images/charts
+        if not raw_text or len(image_list) > 0:
+            # Render page to PNG for VLM and frontend viewer
+            pix = page.get_pixmap(dpi=150)
+            pix.save(str(cached_img_path))
             
-            # Check text content and images
-            raw_text = page.get_text().strip()
-            image_list = page.get_images()
+            # VLM call
+            vlm_text = await asyncio.to_thread(_call_vlm, cached_img_path)
             
-            page_text = ""
-            cached_img_path = doc_folder / f"{doc_id}_{page_num}.png"
-            
-            # Scanned page or contains images/charts
-            if not raw_text or len(image_list) > 0:
-                # Render page to PNG for VLM and frontend viewer
-                pix = page.get_pixmap(dpi=150)
-                pix.save(str(cached_img_path))
-                
-                # VLM call
-                vlm_text = await asyncio.to_thread(_call_vlm, cached_img_path)
-                
-                if vlm_text:
-                    # VLM output is well-structured (respects visual layout),
-                    # so use it as primary content for better tree_parser recognition.
-                    # Append raw_text as supplementary reference if available.
-                    if raw_text:
-                        page_text = vlm_text + "\n\n### [Raw Text Layer (Supplementary Reference)]\n" + raw_text
-                    else:
-                        page_text = vlm_text
-                elif raw_text:
-                    page_text = raw_text
+            if vlm_text:
+                # VLM output is well-structured (respects visual layout),
+                # so use it as primary content for better tree_parser recognition.
+                # Append raw_text as supplementary reference if available.
+                if raw_text:
+                    page_text = vlm_text + "\n\n### [Raw Text Layer (Supplementary Reference)]\n" + raw_text
                 else:
-                    page_text = f"[Scanned page {page_num} contains no extractable digital text]"
-            else:
-                # Just extract text
+                    page_text = vlm_text
+            elif raw_text:
                 page_text = raw_text
-                # Render to image anyway for frontend right-panel original page viewing
-                pix = page.get_pixmap(dpi=150)
-                pix.save(str(cached_img_path))
-                
-            pages.append({"page": page_num, "content": page_text})
+            else:
+                page_text = f"[Scanned page {page_num} contains no extractable digital text]"
+        else:
+            # Just extract text
+            page_text = raw_text
+            # Render to image anyway for frontend right-panel original page viewing
+            pix = page.get_pixmap(dpi=150)
+            pix.save(str(cached_img_path))
+            
+        pages.append({"page": page_num, "content": page_text})
         
     return pages
 
