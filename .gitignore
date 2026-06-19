@@ -22,6 +22,9 @@ prompt.md
 # Test Files
 /tests/
 
+# Scratch files
+/scratch/
+
 # Environment variables
 .env
 .env.*

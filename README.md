@@ -13,7 +13,7 @@ An agentic, vectorless, local multimodal RAG application designed to index, expl
 5. **Robust Document Actions**: Rename, delete, and download original files directly from the Library actions menu. Renaming syncs disk image directories and upload paths, and deleting cleans up all cached files cleanly.
 6. **Adjustable Split Layout**: Clean Material 3 style layout with drag-resizable split panes (Left Settings, Center Chat, Right Inspector) that persist pane widths in `localStorage`.
 
-![Screenshot](screenshot_1.png)
+![Screenshot](screenshot-1.png)
 
 ---
 
