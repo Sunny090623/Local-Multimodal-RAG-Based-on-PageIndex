@@ -1,4 +1,4 @@
-# Local Multimodal RAG
+# Local Multimodal RAG Based on PageIndex
 
 An agentic, vectorless, local multimodal RAG application designed to index, explore, and chat with local documents (PDF, DOCX, TXT, MD, Images) using outline structure trees and visual VLM layout extraction.
 
@@ -20,7 +20,7 @@ An agentic, vectorless, local multimodal RAG application designed to index, expl
 
 ## 🔄 Recent Enhancements
 
-We recently added major enhancements to the local chat experience, state persistence, and layout navigation:
+Major enhancements was added to the local chat experience, state persistence, and layout navigation:
 
 1. **Interactive Notebook Dashboard**:
    * Introduced a modern dashboard home page (`/`) that manages all workspaces and notebooks dynamically.
