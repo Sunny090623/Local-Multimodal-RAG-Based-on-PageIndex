@@ -1,4 +1,4 @@
-# PageIndex Local Multimodal RAG
+# Local Multimodal RAG
 
 An agentic, vectorless, local multimodal RAG application designed to index, explore, and chat with local documents (PDF, DOCX, TXT, MD, Images) using outline structure trees and visual VLM layout extraction.
 
@@ -15,6 +15,30 @@ An agentic, vectorless, local multimodal RAG application designed to index, expl
 
 ![Screenshot](screenshot-1.png)
 
+---
+
+## 🔄 Recent Enhancements
+
+We recently added major enhancements to the local chat experience, state persistence, and layout navigation:
+
+1. **Persistent Notebook Conversation History**: 
+   * Chat logs are permanently stored on the backend as presentation-independent structured JSON data (containing raw content, reasoning logs, citations, and timestamps).
+   * Conversations are notebook-scoped, auto-restoring historical messages upon reloading or reopening workspaces.
+   * User inputs are auto-saved instantly to prevent data loss.
+2. **Chat Generation Controls & Graceful Cancellation**:
+   * A **Stop** button replaces the send icon while generating (retaining primary visual consistency).
+   * Supports **graceful stop signals** via `/api/chat/stop?session_id={session_id}`. This instructs the backend to break the generation loop, wrap up the current partial response, write statistics, and exit the connection cleanly.
+   * Session-isolated architecture prevents concurrent multi-tab requests from interfering with each other's stream controls.
+   * Text inputs remain **fully editable** during active generation so users can draft their next query, preserving drafts intact when completing or stopping.
+3. **High-Fidelity Generation Statistics**:
+   * Assistant messages feature a lightweight monospace performance footer (e.g., `8.4s • 31.6 tok/s • 264 tokens (prompt: 120, total: 384) • ttft: 0.12s`).
+   * Parses native Ollama API statistics (`prompt_eval_count`, `eval_count`, `eval_duration`, `total_duration`) for exact metrics, falling back to manual token counts and character evaluations for other LLM backends.
+   * Measures Time To First Token (TTFT) dynamically inside stream wrappers.
+4. **Clear Chat History Button**: Added a "Clear Chat" broom-outline button to the chat header next to the page counts. It prompts for confirmation, deletes stored history via `/api/conversations/active/clear`, resets the view to default greetings, and hides itself when no document context is active.
+5. **Pure Runtime Storage**: Refactored the entire `backend/storage/` directory to be a pure runtime folder (completely ignored in `.gitignore`). All sub-directories (`uploads/`, `images/`, `notebooks/`, `cache/`, `conversations/`) are auto-created at boot.
+6. **Redirection & Cleanups**: Wired the workspace header logo relatively to `/` for smooth home navigation and removed the duplicate header button from the dashboard.
+
+![Screenshot](screenshot-2.png)
 ---
 
 ## 🛠️ Tech Stack & Architecture
