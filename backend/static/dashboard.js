@@ -107,7 +107,7 @@ function setupEventListeners() {
     createTitleInput.focus();
   };
 
-  createNbBtn.addEventListener('click', openCreateDialog);
+  if (createNbBtn) createNbBtn.addEventListener('click', openCreateDialog);
   if (emptyCreateBtn) emptyCreateBtn.addEventListener('click', openCreateDialog);
   if (createCardWrapper) createCardWrapper.addEventListener('click', openCreateDialog);
 
